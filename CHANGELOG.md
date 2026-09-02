@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Move the generic package into its own repository while retaining its focused
+  five-commit development history and exact v0.1.5 source tree.
+- Add explicit migration provenance, MIT licence text, canonical repository
+  metadata and a pinned GitHub Actions quality gate.
+- Correct the installation path for the standalone repository and allow pip to
+  verify declared dependencies rather than recommending `--no-deps`.
+- Make no scientific calculation, schema or report-rendering changes.
+
 ## 0.1.5 - 2026-09-01
 
 - Keep the PCoA view first but render points without edges by default, using

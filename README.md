@@ -1,5 +1,7 @@
 # orthofinder-results
 
+[![CI](https://github.com/peterthorpe5/orthofinder-results/actions/workflows/ci.yml/badge.svg)](https://github.com/peterthorpe5/orthofinder-results/actions/workflows/ci.yml)
+
 `orthofinder-results` turns a completed OrthoFinder result directory into a
 versioned, queryable and portable analytical resource. It is intentionally a
 generic package: no E3-ligase assumptions are built into its parsers or schema.
@@ -13,6 +15,14 @@ rebuilding the package.
 
 This project is independent of, and is not endorsed by, the OrthoFinder
 authors. Cite OrthoFinder itself when using its results.
+
+The canonical repository is
+[`peterthorpe5/orthofinder-results`](https://github.com/peterthorpe5/orthofinder-results).
+The generic package was extracted from its original development location in
+`E3_project_draft` without bringing E3-specific code or ranking assumptions
+with it. See the
+[migration provenance](https://github.com/peterthorpe5/orthofinder-results/blob/main/MIGRATION_PROVENANCE.md)
+for the exact source commit, subtree hash and commit mapping.
 
 ## What one run publishes
 
@@ -115,10 +125,10 @@ raw ingestion layer.
 Conda is recommended on the cluster:
 
 ```bash
-cd /path/to/E3_project_draft/orthofinder_results
+cd /path/to/orthofinder-results
 conda env create --file environment.yml
 conda activate orthofinder_results
-python -m pip install --no-deps --editable .
+python -m pip install --editable .
 ./run_tests.sh
 ```
 

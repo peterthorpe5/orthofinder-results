@@ -21,11 +21,17 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "coverage>=7.6,<8",
+  "build>=1.2,<2",
   "pycodestyle>=2.12,<3",
   "pydocstyle>=6.3,<7",
   "pytest>=8,<9",
   "ruff>=0.15,<1",
 ]
+
+[project.urls]
+Repository = "https://github.com/peterthorpe5/orthofinder-results"
+Issues = "https://github.com/peterthorpe5/orthofinder-results/issues"
+Changelog = "https://github.com/peterthorpe5/orthofinder-results/blob/main/CHANGELOG.md"
 
 [project.scripts]
 orthofinder-results = "orthofinder_results.cli:main"
