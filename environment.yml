@@ -15,4 +15,8 @@ dependencies:
   - pycodestyle>=2.12,<3
   - pydocstyle>=6.3,<7
   - ruff>=0.15,<1
+  - networkx>=3,<4
+  - plotly>=6,<7
+  - scipy>=1.14,<2
+  - streamlit>=1.52,<2
   - pip

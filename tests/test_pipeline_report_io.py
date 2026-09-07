@@ -11,6 +11,7 @@ import pyarrow.parquet as pq
 import pytest
 
 import orthofinder_results.pipeline as pipeline_module
+from orthofinder_results import __version__
 from orthofinder_results.cli import main
 from orthofinder_results.errors import InputValidationError, PublicationError
 from orthofinder_results.io_utils import (
@@ -172,8 +173,8 @@ def test_report_only_regeneration_preserves_completed_resource(
     assert record["size_bytes"] == standalone.stat().st_size
     assert sha256_file(path=manifest) == manifest_digest
     html = standalone.read_text(encoding="utf-8")
-    assert '"package_version":"0.1.5"' in html
-    assert '"resource_package_version":"0.1.5"' in html
+    assert f'"package_version":"{__version__}"' in html
+    assert f'"resource_package_version":"{__version__}"' in html
     with pytest.raises(PublicationError, match="already exists"):
         regenerate_report(
             resource_dir=resource,

@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+## 0.3.0 - 2026-09-07
+
+- Port the bounded distance pilot into separate application pages for PCoA and
+  conservative fit diagnostics, Shepard plots, branch-length phylograms, exact
+  distance matrices and nearest-neighbour topology.
+- Validate the schema-2 offline report's run-bound JSON payload as the bounded
+  compatibility authority for pruned phylograms not persisted separately in
+  older DuckDB resources.
+- Link exact member and species selections across every evolutionary view and
+  retain sampled-medoid, distance-method and displayed/full-group scope.
+- Add a versioned reviewed-taxonomy TSV contract, audit table, review template,
+  upload/sidecar workflows and explicit `REVIEWED`, `UNMAPPED`, `AMBIGUOUS` and
+  missing states.
+- Add NCBI taxon-ID/descendant searches for `contains`, `enriched`, `exclusive
+  within sampled analysis` and `near-exclusive` semantics.
+- Calculate enrichment with one-sided Fisher exact species-presence tests and
+  Benjamini–Hochberg correction across the complete selected group authority;
+  retain sampled outsiders and unresolved labels in results.
+- Select the first available local Streamlit port from 8501 upwards when no
+  exact `--server-port` is supplied.
+- Add explicit Plotly, NetworkX and SciPy application dependencies and expand
+  unit, integration and Streamlit end-to-end coverage.
+
+## 0.2.0 - 2026-09-07
+
+- Add the first independent Streamlit application package and the fully named
+  `orthofinder-interrogation-app` launcher.
+- Validate completed resource directories and direct DuckDB files before opening
+  them, require schema 2, and keep every application query read-only.
+- Add complete-authority overview counts and bounded lazy group searches.
+- Add exact species filters for any selected species, every selected species or
+  exactly the selected species set, plus explicit rejection of groups containing
+  any selected species.
+- Add group/member identifier searches, group-size and species-breadth bounds,
+  distance-availability controls and deterministic sorting.
+- Join existing mean, median and population-SD distance summaries to group search
+  results while retaining calculation method and sampled/full status.
+- Add selected-group copy-count and complete-membership views with TSV downloads.
+- Retain the v0.1.5 offline HTML report as a downloadable companion view.
+- Add unit, integration and Streamlit end-to-end coverage for the application.
+
 - Move the generic package into its own repository while retaining its focused
   five-commit development history and exact v0.1.5 source tree.
 - Add explicit migration provenance, MIT licence text, canonical repository

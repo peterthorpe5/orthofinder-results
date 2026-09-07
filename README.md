@@ -135,9 +135,97 @@ python -m pip install --editable .
 For an existing Python 3.11+ environment:
 
 ```bash
-python -m pip install --editable '.[dev]'
+python -m pip install --editable '.[app,dev]'
 ./run_tests.sh
 ```
+
+The `app` extra installs the independent Streamlit viewer. It is not required
+when the package is used only to build resources on a cluster.
+
+## Interactive application
+
+Version 0.3.0 provides the read-only standalone application. It opens either
+a completed resource directory or its `duckdb/orthofinder_results.duckdb` file:
+
+```bash
+orthofinder-interrogation-app \
+  --resource-dir /path/to/completed/resource
+```
+
+The launcher validates the manifest, schema, run identity and required DuckDB
+relations before starting a local Streamlit server. The database is opened
+read-only for every bounded query. If port 8501 is occupied, the launcher now
+selects the first available port from 8501 upwards; `--server-port` still
+requests one exact port. An optional persistent log can be declared outside the
+immutable resource:
+
+```bash
+orthofinder-interrogation-app \
+  --resource-dir /path/to/completed/resource \
+  --log-file /path/to/logs/orthofinder_interrogation_app.log
+```
+
+The application provides:
+
+- complete-authority resource counts and capability identity;
+- bounded group searches by group/member identifier, group type and hierarchy;
+- exact stored-species filters with `ANY`, `ALL` and `EXACT_SET` semantics;
+- rejection of every group containing any selected excluded species;
+- member-count, species-count and distance-availability bounds;
+- group compactness columns from mean, median and population-SD distances;
+- explicit distance method and deterministic-sample status;
+- per-species copy counts and complete selected-group memberships within a
+  documented 50,000-row browser materialisation bound; and
+- TSV downloads plus access to the existing self-contained HTML report.
+
+The evolutionary-views page ports the bounded distance pilot into separate
+PCoA, Shepard, branch-length phylogram, exact distance-matrix and
+nearest-neighbour-topology panels. A member/species selection is linked across
+all panels. Schema-2 resources did not publish the pruned resolved-gene-tree
+geometry as a standalone DuckDB relation, so the application validates and
+uses the matching run-bound payload in the immutable offline report for these
+bounded views. DuckDB remains the complete group-search authority. PCoA and
+force layouts retain their diagnostic/non-quantitative warnings, while every
+panel shows the exact distance method and displayed-sample scope.
+
+Exact species labels do not establish taxonomic ancestry. The taxonomic-search
+page therefore accepts a separate reviewed TSV rather than guessing from label
+text. Start by downloading the review template in the page. A reviewed row
+records the workflow/source/accepted names, NCBI taxon and parent IDs/names,
+aligned lineage IDs/names, mapping status/method/source/date/version, reviewer,
+review time and note. `UNMAPPED`, `AMBIGUOUS` and missing labels remain visible
+and never silently become descendants or reviewed outsiders.
+
+The mapping can be uploaded for one browser session or supplied as a sidecar:
+
+```bash
+orthofinder-interrogation-app \
+  --resource-dir /path/to/completed/resource \
+  --taxonomy-map /path/to/reviewed_taxonomy_mapping.tsv \
+  --log-file /path/to/logs/orthofinder_interrogation_app.log
+```
+
+[`examples/results_feb26_ncbi_taxonomy_mapping_20260907.tsv`](examples/results_feb26_ncbi_taxonomy_mapping_20260907.tsv)
+is a 60-label sidecar for the `Results_Feb26` resource. It was resolved against
+the official NCBI `taxdump.tar.gz` snapshot published on 7 September 2026. It
+contains 59 reviewed unique exact-name matches and deliberately retains
+`Leismania_major` as `UNMAPPED`; confirm and document that apparent workflow
+misspelling against the original FASTA provenance before changing its status.
+
+Taxon-ID/descendant searches use only `REVIEWED` rows and provide four explicit
+semantics:
+
+- `contains` requires represented reviewed descendants;
+- `enriched` applies a one-sided Fisher exact species-presence test against the
+  reviewed sampled target/outside universe and Benjamini–Hochberg correction
+  across every group at the selected exact authority and hierarchy;
+- `exclusive within sampled analysis` rejects reviewed outsiders and unresolved
+  represented labels; and
+- `near-exclusive` applies declared outsider/unresolved limits and lists every
+  retained outsider.
+
+Exclusive results are claims only about species sampled in this OrthoFinder run,
+not universal biological absence claims.
 
 ## Inspect before running
 
@@ -339,11 +427,10 @@ Open the database with:
 duckdb /path/to/output/duckdb/orthofinder_results.duckdb
 ```
 
-## Scope of version 0.1.5
+## Scope of version 0.3.0
 
-Version 0.1.5 adds projection-quality-forward PCoA, checksum-bound phylograms,
-exact bounded distance matrices and complete-authority opening aggregates to
-the loss-aware, version-aware ingestion and report-only regeneration foundation.
+Version 0.3.0 adds the read-only visual and reviewed-taxonomy application layers
+to the loss-aware, version-aware ingestion and report-only regeneration foundation.
 Cross-run cluster lineage
 (stable overlap scores, split/merge classification and taxon-aware
 comparisons) belongs in a later, separately tested comparison layer. Keeping

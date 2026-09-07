@@ -1,0 +1,4 @@
+networkx>=3,<4
+plotly>=6,<7
+scipy>=1.14,<2
+streamlit>=1.52,<2
