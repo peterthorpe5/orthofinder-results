@@ -4,9 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import duckdb
 import pytest
 
-from orthofinder_interrogation_app.models import GroupKey, GroupSearchFilters
+from orthofinder_interrogation_app.models import (
+    DistanceResultFilters,
+    GroupKey,
+    GroupSearchFilters,
+)
 from orthofinder_interrogation_app.queries import OrthoFinderQueryService
 from orthofinder_interrogation_app.resource import open_resource
 from orthofinder_results.errors import InputValidationError
@@ -46,6 +51,138 @@ def test_resource_selectors_and_overview_are_complete(
         "distance_group_count": 2,
         "portable_tree_count": 0,
     }
+
+
+def test_all_distance_result_facets_and_selected_statistics(
+    query_service: OrthoFinderQueryService,
+) -> None:
+    """The complete result authority exposes filters and selected distance fields."""
+
+    assert query_service.distance_result_facets() == {
+        "group_types": ("HOG",),
+        "hierarchy_nodes": ("N0",),
+        "distance_methods": ("patristic_branch_length",),
+        "computation_statuses": ("EXACT",),
+    }
+    result = query_service.distance_results(
+        filters=DistanceResultFilters(),
+        columns=(
+            "group_id",
+            "mean_distance",
+            "sampling_fraction",
+            "full_group_matrix",
+            "interquartile_range",
+            "relative_distance_spread",
+        ),
+    )
+    assert result.total_rows == 2
+    assert result.columns[0] == "group_id"
+    assert [row["group_id"] for row in result.rows] == ["N0.HOG1", "N0.HOG3"]
+    first = result.rows[0]
+    assert first["mean_distance"] == pytest.approx(0.1)
+    assert first["sampling_fraction"] == pytest.approx(1.0)
+    assert first["full_group_matrix"] is True
+    assert first["interquartile_range"] == pytest.approx(0.1)
+    assert first["relative_distance_spread"] == pytest.approx(0.2)
+
+
+def test_all_distance_result_filters_and_bounds_are_defensive(
+    query_service: OrthoFinderQueryService,
+) -> None:
+    """Exact filters work and invalid or excessive exports fail before materialisation."""
+
+    exact = query_service.distance_results(
+        filters=DistanceResultFilters(
+            group_type=" HOG ",
+            hierarchy_node=" N0 ",
+            distance_method=" patristic_branch_length ",
+            computation_status=" EXACT ",
+        ),
+        columns=("group_id", "distance_method"),
+    )
+    assert exact.total_rows == 2
+    empty = query_service.distance_results(
+        filters=DistanceResultFilters(distance_method="missing"),
+        columns=("group_id",),
+    )
+    assert empty.total_rows == 0 and empty.rows == ()
+    with pytest.raises(InputValidationError, match="at least one"):
+        query_service.distance_results(
+            filters=DistanceResultFilters(),
+            columns=(),
+        )
+    with pytest.raises(InputValidationError, match="must be unique"):
+        query_service.distance_results(
+            filters=DistanceResultFilters(),
+            columns=("group_id", "group_id"),
+        )
+    with pytest.raises(InputValidationError, match="Unsupported all-results"):
+        query_service.distance_results(
+            filters=DistanceResultFilters(),
+            columns=("unsafe_sql",),
+        )
+    with pytest.raises(InputValidationError, match="contains 2 groups"):
+        query_service.distance_results(
+            filters=DistanceResultFilters(),
+            columns=("group_id",),
+            maximum=1,
+        )
+    with pytest.raises(InputValidationError, match="maximum must be"):
+        query_service.distance_results(
+            filters=DistanceResultFilters(),
+            columns=("group_id",),
+            maximum=0,
+        )
+
+
+def test_all_distance_result_filter_models_reject_invalid_text() -> None:
+    """NULs and non-text values cannot reach result-query parameters."""
+
+    assert DistanceResultFilters(hierarchy_node="").hierarchy_node == ""
+    assert DistanceResultFilters(hierarchy_node=None).hierarchy_node is None
+    with pytest.raises(InputValidationError, match="group_type must be text"):
+        DistanceResultFilters(group_type=1)  # type: ignore[arg-type]
+    with pytest.raises(InputValidationError, match="NUL"):
+        DistanceResultFilters(distance_method="bad\x00method")
+    with pytest.raises(InputValidationError, match="text or None"):
+        DistanceResultFilters(hierarchy_node=1)  # type: ignore[arg-type]
+
+
+def test_all_distance_results_prefer_complete_then_apply_scope_filter(
+    application_resource: Path,
+) -> None:
+    """One row per group prefers completeness unless a sampled scope is requested."""
+
+    database = application_resource / "duckdb" / "orthofinder_results.duckdb"
+    connection = duckdb.connect(str(database))
+    try:
+        connection.execute(
+            "INSERT INTO distance_statistics SELECT run_id, group_type, hierarchy_node, "
+            "group_id, distance_method, 'DETERMINISTIC_MEMBER_SAMPLE', "
+            "member_identifier_resolution, total_member_count, 2, 1, "
+            "unresolved_pair_count, minimum_distance, q05_distance, q25_distance, "
+            "median_distance, 9.0, q75_distance, q95_distance, maximum_distance, "
+            "population_stddev_distance, mean_comparable_sites, 'sample.tsv', "
+            "failure_reason FROM distance_statistics WHERE group_id = 'N0.HOG1'"
+        )
+    finally:
+        connection.close()
+    service = OrthoFinderQueryService(resource=open_resource(path=application_resource))
+    preferred = service.distance_results(
+        filters=DistanceResultFilters(),
+        columns=("group_id", "computation_status", "sampled_member_count", "mean_distance"),
+    )
+    first = next(row for row in preferred.rows if row["group_id"] == "N0.HOG1")
+    assert first["computation_status"] == "EXACT"
+    assert first["sampled_member_count"] == 3
+    sampled = service.distance_results(
+        filters=DistanceResultFilters(
+            computation_status="DETERMINISTIC_MEMBER_SAMPLE"
+        ),
+        columns=("group_id", "computation_status", "mean_distance"),
+    )
+    assert sampled.total_rows == 1
+    assert sampled.rows[0]["mean_distance"] == pytest.approx(9.0)
 
 
 @pytest.mark.parametrize(

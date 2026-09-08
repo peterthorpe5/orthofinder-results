@@ -17,13 +17,14 @@ from .evolutionary_page import (
     _load_catalog,
     _store_comparison_keys,
 )
+from .exports import render_table_downloads
 from .figures import (
     comparison_distribution_figure,
     comparison_pcoa_figure,
     comparison_summary_figure,
 )
+from .guidance import render_graph_guidance
 from .queries import OrthoFinderQueryService
-from .tsv import records_to_tsv
 
 _LOGGER = logging.getLogger("orthofinder_interrogation_app.comparison_page")
 _COMPARISON_COLUMN_HELP = {
@@ -69,8 +70,8 @@ def render_cluster_comparison(
               violin/CDF shape; no single statistic captures multi-scale dispersion.
             - Each PCoA panel has its own coordinate system. Compare internal shape and fit,
               never absolute position, angle or orientation between panels.
-            - Raw method, sampling and analysis-source fields remain in the authority table
-              and downloadable TSV.
+            - Method, sampling and analysis-source fields remain in the authority table and
+              paired TSV/Excel downloads.
             """
         )
     keys = tuple(key for key in _comparison_keys() if key.run_id == resource.run_id)
@@ -153,6 +154,7 @@ def render_cluster_comparison(
         st.error("Fewer than two selected groups have usable exact displayed distances.")
         return
     summaries = _comparison_summaries(analyses=tuple(analyses))
+    render_graph_guidance(key="comparison_summary")
     st.plotly_chart(
         comparison_summary_figure(summaries=summaries),
         width="stretch",
@@ -171,6 +173,7 @@ def render_cluster_comparison(
     )
     distribution_tabs = st.tabs(("Violin distributions", "Cumulative distributions"))
     with distribution_tabs[0]:
+        render_graph_guidance(key="comparison_violin")
         st.plotly_chart(
             comparison_distribution_figure(
                 distance_groups=distributions,
@@ -180,6 +183,7 @@ def render_cluster_comparison(
             config={"displaylogo": False},
         )
     with distribution_tabs[1]:
+        render_graph_guidance(key="comparison_ecdf")
         st.plotly_chart(
             comparison_distribution_figure(
                 distance_groups=distributions,
@@ -198,6 +202,7 @@ def render_cluster_comparison(
         except OrthoFinderResultsError as error:
             st.warning(f"PCoA unavailable for {analysis.key.display_label()}: {error}")
     if len(geometries) >= 2:
+        render_graph_guidance(key="comparison_pcoa")
         st.plotly_chart(
             comparison_pcoa_figure(geometries=geometries),
             width="stretch",
@@ -214,11 +219,17 @@ def render_cluster_comparison(
         hide_index=True,
         column_config=_column_config(descriptions=_COMPARISON_COLUMN_HELP),
     )
-    st.download_button(
-        "Download comparison summary as TSV",
-        data=records_to_tsv(records=summaries),
-        file_name="orthofinder_cluster_comparison.tsv",
-        mime="text/tab-separated-values",
+    displayed_summaries = tuple(
+        _display_comparison_summary_row(row=row) for row in summaries
+    )
+    render_table_downloads(
+        records=displayed_summaries,
+        file_stem="orthofinder_cluster_comparison",
+        key="cluster_comparison_download",
+        tsv_label="Download comparison summary as TSV",
+        excel_label="Download comparison summary as formatted Excel",
+        column_definitions=_COMPARISON_COLUMN_HELP,
+        workbook_title="OrthoFinder cluster comparison",
     )
 
 
@@ -265,7 +276,7 @@ def _comparison_summaries(
 
 
 def _display_comparison_summary_row(*, row: dict[str, Any]) -> dict[str, Any]:
-    """Return readable comparison fields while retaining raw TSV records separately."""
+    """Return readable comparison fields for display and paired downloads."""
 
     return {
         "Cluster": row["label"],

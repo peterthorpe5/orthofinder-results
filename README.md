@@ -146,7 +146,7 @@ when the package is used only to build resources on a cluster.
 
 ## Interactive application
 
-Version 0.4.1 provides the read-only standalone application. It opens either a
+Version 0.5.0 provides the read-only standalone application. It opens either a
 completed resource directory or its `duckdb/orthofinder_results.duckdb` file:
 
 ```bash
@@ -191,7 +191,18 @@ The application provides:
 - histogram, violin, empirical-CDF, medoid-distance, member-centrality and
   species-pair heatmap views of within-group dispersion; and
 - a 2–12-group workspace comparing means, population SDs, medians, exact
-  displayed distributions and independent PCoA small multiples.
+  displayed distributions and independent PCoA small multiples;
+- an **All distance results** page for selecting, previewing and exporting the
+  required biological, statistical and provenance columns across every cluster
+  with a successful persisted distance calculation; and
+- a three-part expandable guide beside every graph describing what it shows,
+  how to interpret it and its most important limitation.
+
+Every downloadable application table is offered as both UTF-8 TSV and formatted
+Excel. The `.xlsx` workbook freezes the top row, supplies filter dropdowns on a
+banded Excel table, applies readable bounded column widths and scientific number
+formats, and includes a **Column definitions** worksheet. Identifiers are written
+as text so values beginning with spreadsheet formula characters remain inert.
 
 Member and species selections are linked across one cluster's panels. PCoA and
 force layouts retain their diagnostic or non-quantitative warnings; the exact
@@ -216,8 +227,10 @@ aligned lineage IDs/names, mapping method/source/version, reviewer, review time
 and note. `PENDING_REVIEW`, `UNMAPPED`, `AMBIGUOUS` and missing labels remain
 visible and never silently become descendants or reviewed outsiders.
 
-The page provides an empty review template. A local extracted NCBI `taxdump` can
-also generate exact-name candidates for every species in any resource:
+The page provides an empty review template in both TSV and formatted Excel. The
+reviewed mapping supplied back to the application remains versionable UTF-8 TSV.
+A local extracted NCBI `taxdump` can also generate exact-name candidates for
+every species in any resource:
 
 ```bash
 orthofinder-taxonomy-map \
@@ -473,16 +486,22 @@ Open the database with:
 duckdb /path/to/output/duckdb/orthofinder_results.duckdb
 ```
 
-## Scope of version 0.4.1
+## Scope of version 0.5.0
 
-Version 0.4.1 adds a guided Summary page, contextual help, plain-language
-interface labels and a task-oriented glossary to the v0.4 portable-tree,
-taxonomy, dispersion and within-run comparison foundation. The standalone app
-owns generic OrthoFinder interrogation: group membership, copy number, species
-breadth, reviewed taxonomy, distances, compactness, trees and within-run
-comparison. Explicit nested-HOG interrogation and cross-run cluster lineage
-(stable overlap scores plus split/merge classification) remain later,
-separately tested generic layers.
+Version 0.5.0 adds paired formatted Excel/TSV downloads, graph-specific
+interpretation help and a selectable dataset-wide table of persisted distance
+statistics to the v0.4 portable-tree, taxonomy, dispersion and within-run
+comparison foundation. The standalone app owns generic OrthoFinder
+interrogation: group membership, copy number, species breadth, reviewed
+taxonomy, distances, compactness, trees and within-run comparison. Explicit
+nested-HOG interrogation and cross-run cluster lineage (stable overlap scores
+plus split/merge classification) remain later, separately tested generic
+layers.
+
+The dataset-wide page deliberately reports persisted resource results only. It
+does not silently mix calculations from a user's mutable on-demand sidecar into
+an immutable run-level export. Rebuild or publish those additional calculations
+before treating them as dataset-wide authority.
 
 E3-ligase ranking, expression, experimental evidence, structures, conserved
 ligandable pockets and chemistry starting points remain in the separate E3

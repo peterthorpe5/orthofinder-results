@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+## 0.5.0 - 2026-09-08
+
+- Add an **All distance results** page that exports one preferred successful
+  persisted distance summary per cluster, with exact group-system, hierarchy,
+  method and calculation-scope filters and a selectable 34-column schema.
+- Prefer complete matrices over sampled matrices for the same cluster and,
+  when only samples exist, select the largest stored sample deterministically.
+- Add distance-centred result fields including sampling fraction, full-matrix
+  status, five-number summaries, population SD, interquartile range and relative
+  distance spread, while keeping source and calculation provenance selectable.
+- Add formatted Excel workbooks beside every application TSV table download.
+  Workbooks use frozen headings, filterable banded tables, readable bounded
+  column widths, typed scientific number formats and a column-definitions sheet.
+- Write identifiers and all other text explicitly as text to prevent spreadsheet
+  formula interpretation, and enforce Excel row and column limits before export.
+- Add a consistent expandable interpretation panel to every application graph,
+  explaining what it shows, how to interpret it and its principal limitation.
+- Keep on-demand sidecar calculations separate from the immutable dataset-wide
+  export until they are published in a rebuilt resource, avoiding mixed
+  authorities in reproducible results.
+- Extend unit and Streamlit end-to-end coverage for result selection, query
+  ranking, workbook internals, safe cell handling, graph-guidance completeness
+  and the new application route.
+
 ## 0.4.1 - 2026-09-08
 
 - Make Summary the guided opening page, place biological questions and routes

@@ -12,6 +12,8 @@ import duckdb
 from orthofinder_results.errors import InputValidationError
 
 from .models import (
+    DistanceResultFilters,
+    DistanceResultSet,
     GroupKey,
     GroupSearchFilters,
     ResourceIdentity,
@@ -26,6 +28,7 @@ _LOGGER = logging.getLogger("orthofinder_interrogation_app.queries")
 MAX_GROUP_MEMBER_ROWS = 50_000
 MAX_GROUP_DISTANCE_ROWS = 124_750
 MAX_TAXONOMY_TEST_GROUPS = 250_000
+MAX_ALL_DISTANCE_RESULTS = 250_000
 _MEMBERSHIP_RELATIONS = {
     "HOG": "hog_memberships",
     "LEGACY_ORTHOGROUP": "legacy_orthogroup_memberships",
@@ -72,6 +75,84 @@ _GROUP_COLUMNS = (
     "population_stddev_distance",
     "failure_reason",
 )
+DISTANCE_RESULT_COLUMNS = (
+    "run_id",
+    "group_type",
+    "hierarchy_node",
+    "group_id",
+    "legacy_orthogroup_id",
+    "gene_tree_parent_clade",
+    "member_count",
+    "species_count",
+    "single_copy_species_count",
+    "max_copies_per_species",
+    "mean_copies_per_species",
+    "distance_method",
+    "computation_status",
+    "member_identifier_resolution",
+    "total_member_count",
+    "sampled_member_count",
+    "sampling_fraction",
+    "full_group_matrix",
+    "distance_pair_count",
+    "unresolved_pair_count",
+    "minimum_distance",
+    "q05_distance",
+    "q25_distance",
+    "median_distance",
+    "mean_distance",
+    "q75_distance",
+    "q95_distance",
+    "maximum_distance",
+    "population_stddev_distance",
+    "interquartile_range",
+    "relative_distance_spread",
+    "mean_comparable_sites",
+    "source_file",
+    "failure_reason",
+)
+_DISTANCE_RESULT_EXPRESSIONS = {
+    "run_id": "g.run_id",
+    "group_type": "g.group_type",
+    "hierarchy_node": "g.hierarchy_node",
+    "group_id": "g.group_id",
+    "legacy_orthogroup_id": "g.legacy_orthogroup_id",
+    "gene_tree_parent_clade": "g.gene_tree_parent_clade",
+    "member_count": "g.member_count",
+    "species_count": "g.species_count",
+    "single_copy_species_count": "g.single_copy_species_count",
+    "max_copies_per_species": "g.max_copies_per_species",
+    "mean_copies_per_species": "g.mean_copies_per_species",
+    "distance_method": "d.distance_method",
+    "computation_status": "d.computation_status",
+    "member_identifier_resolution": "d.member_identifier_resolution",
+    "total_member_count": "d.total_member_count",
+    "sampled_member_count": "d.sampled_member_count",
+    "sampling_fraction": (
+        "CASE WHEN d.total_member_count > 0 THEN "
+        "d.sampled_member_count::DOUBLE / d.total_member_count ELSE NULL END"
+    ),
+    "full_group_matrix": "d.sampled_member_count = d.total_member_count",
+    "distance_pair_count": "d.distance_pair_count",
+    "unresolved_pair_count": "d.unresolved_pair_count",
+    "minimum_distance": "d.minimum_distance",
+    "q05_distance": "d.q05_distance",
+    "q25_distance": "d.q25_distance",
+    "median_distance": "d.median_distance",
+    "mean_distance": "d.mean_distance",
+    "q75_distance": "d.q75_distance",
+    "q95_distance": "d.q95_distance",
+    "maximum_distance": "d.maximum_distance",
+    "population_stddev_distance": "d.population_stddev_distance",
+    "interquartile_range": "d.q75_distance - d.q25_distance",
+    "relative_distance_spread": (
+        "CASE WHEN d.mean_distance > 0 THEN "
+        "d.population_stddev_distance / d.mean_distance ELSE NULL END"
+    ),
+    "mean_comparable_sites": "d.mean_comparable_sites",
+    "source_file": "d.source_file",
+    "failure_reason": "d.failure_reason",
+}
 
 
 class OrthoFinderQueryService:
@@ -188,6 +269,108 @@ class OrthoFinderQueryService:
             parameters=(),
         )
         return tuple(rows)
+
+    def distance_result_facets(self) -> dict[str, tuple[str, ...]]:
+        """Return exact stored-distance values available for export filters.
+
+        Returns:
+            Group systems, hierarchy nodes, methods and calculation statuses
+            represented by successful persisted distance summaries.
+        """
+
+        dimensions = {
+            "group_types": "group_type",
+            "hierarchy_nodes": "hierarchy_node",
+            "distance_methods": "distance_method",
+            "computation_statuses": "computation_status",
+        }
+        facets: dict[str, tuple[str, ...]] = {}
+        for label, column in dimensions.items():
+            rows = self._query(
+                sql=(
+                    f"SELECT DISTINCT {column} AS value FROM distance_statistics "
+                    "WHERE distance_pair_count > 0 ORDER BY value"
+                ),
+                parameters=(),
+            )
+            facets[label] = tuple(str(row["value"] or "") for row in rows)
+        return facets
+
+    def distance_results(
+        self,
+        *,
+        filters: DistanceResultFilters,
+        columns: tuple[str, ...],
+        maximum: int = MAX_ALL_DISTANCE_RESULTS,
+    ) -> DistanceResultSet:
+        """Return every bounded persisted group-distance summary after filtering.
+
+        Exactly one preferred successful distance summary is returned per group.
+        If a method or calculation status is selected, preference is evaluated
+        only within that exact subset.
+
+        Args:
+            filters: Exact result-scope filters.
+            columns: Whitelisted fields to materialise, in requested order.
+            maximum: Maximum complete rows allowed in the application process.
+
+        Returns:
+            Complete result rows, count and selected column order.
+
+        Raises:
+            InputValidationError: If columns or the complete result size are unsafe.
+        """
+
+        if not columns:
+            raise InputValidationError("Select at least one all-results column.")
+        if len(set(columns)) != len(columns):
+            raise InputValidationError("All-results columns must be unique.")
+        unsupported = tuple(column for column in columns if column not in DISTANCE_RESULT_COLUMNS)
+        if unsupported:
+            raise InputValidationError(
+                "Unsupported all-results columns: " + "; ".join(unsupported)
+            )
+        if not 1 <= maximum <= MAX_ALL_DISTANCE_RESULTS:
+            raise InputValidationError(
+                f"maximum must be between 1 and {MAX_ALL_DISTANCE_RESULTS:,}."
+            )
+        count_sql, parameters = _distance_result_query(
+            run_id=self.resource.run_id,
+            filters=filters,
+            selected_sql="count(*) AS result_count",
+            ordered=False,
+        )
+        count = int(
+            self._query(
+                sql=count_sql,
+                parameters=parameters,
+            )[0]["result_count"]
+        )
+        if count > maximum:
+            raise InputValidationError(
+                f"The selected distance authority contains {count:,} groups; the complete "
+                f"interactive export limit is {maximum:,}. Narrow the group system, "
+                "species-tree level, method or calculation scope."
+            )
+        selected = ", ".join(
+            f"{_DISTANCE_RESULT_EXPRESSIONS[column]} AS {column}" for column in columns
+        )
+        result_sql, result_parameters = _distance_result_query(
+            run_id=self.resource.run_id,
+            filters=filters,
+            selected_sql=selected,
+        )
+        rows = self._query(
+            sql=result_sql,
+            parameters=result_parameters,
+        )
+        _LOGGER.info(
+            "Complete distance result export loaded: run=%s, rows=%s, columns=%s",
+            self.resource.run_id,
+            len(rows),
+            len(columns),
+        )
+        return DistanceResultSet(rows=tuple(rows), total_rows=count, columns=columns)
 
     def search_groups(self, *, filters: GroupSearchFilters) -> SearchPage:
         """Return one bounded page matching exact search semantics.
@@ -705,6 +888,48 @@ def _group_search_query(
         f"AND d.app_distance_rank = 1 WHERE {where_sql}"
     )
     return sql, tuple(parameters)
+
+
+def _distance_result_query(
+    *,
+    run_id: str,
+    filters: DistanceResultFilters,
+    selected_sql: str,
+    ordered: bool = True,
+) -> tuple[str, tuple[object, ...]]:
+    """Build a one-preferred-summary-per-group distance query."""
+
+    distance_conditions = ["d.distance_pair_count > 0"]
+    group_conditions = ["g.run_id = ?"]
+    distance_parameters: list[object] = []
+    if filters.distance_method:
+        distance_conditions.append("d.distance_method = ?")
+        distance_parameters.append(filters.distance_method)
+    if filters.computation_status:
+        distance_conditions.append("d.computation_status = ?")
+        distance_parameters.append(filters.computation_status)
+    distance_where = " AND ".join(distance_conditions)
+    group_parameters: list[object] = [run_id]
+    if filters.group_type:
+        group_conditions.append("g.group_type = ?")
+        group_parameters.append(filters.group_type)
+    if filters.hierarchy_node is not None:
+        group_conditions.append("g.hierarchy_node = ?")
+        group_parameters.append(filters.hierarchy_node)
+    group_where = " AND ".join(group_conditions)
+    order_sql = " ORDER BY g.group_type, g.hierarchy_node, g.group_id" if ordered else ""
+    sql = (
+        "WITH ranked_distance AS (SELECT d.*, row_number() OVER (PARTITION BY "
+        "d.run_id, d.group_type, d.hierarchy_node, d.group_id ORDER BY "
+        "CASE WHEN d.sampled_member_count = d.total_member_count THEN 0 ELSE 1 END, "
+        "d.sampled_member_count DESC, d.distance_method, d.source_file) "
+        f"AS app_distance_rank FROM distance_statistics AS d WHERE {distance_where}) "
+        f"SELECT {selected_sql} FROM group_statistics AS g JOIN ranked_distance AS d "
+        "ON d.run_id = g.run_id AND d.group_type = g.group_type "
+        "AND d.hierarchy_node = g.hierarchy_node AND d.group_id = g.group_id "
+        f"AND d.app_distance_rank = 1 WHERE {group_where}{order_sql}"
+    )
+    return sql, tuple((*distance_parameters, *group_parameters))
 
 
 def _append_species_conditions(

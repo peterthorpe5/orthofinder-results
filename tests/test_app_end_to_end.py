@@ -81,6 +81,32 @@ def test_offline_report_and_invalid_resource_routes(
     assert "could not be opened" in test.error[0].value
 
 
+def test_all_distance_results_route_exports_complete_selection(
+    application_resource: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The new dataset-wide page renders every persisted distance group end to end."""
+
+    test = _application_test(
+        application_resource=application_resource,
+        monkeypatch=monkeypatch,
+    )
+    test.sidebar.radio[0].set_value("All distance results")
+    test.run()
+    assert not test.exception
+    assert any(header.value == "All distance results" for header in test.header)
+    assert any(
+        metric.label == "Clusters in complete export" and metric.value == "2"
+        for metric in test.metric
+    )
+    assert test.dataframe
+    assert len(test.get("download_button")) >= 2
+    assert any(
+        "one preferred stored result per cluster" in markdown.value
+        for markdown in test.markdown
+    )
+
+
 def test_evolutionary_and_reviewed_taxonomy_routes(
     application_resource: Path,
     taxonomy_mapping_file: Path,

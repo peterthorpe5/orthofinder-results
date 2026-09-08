@@ -250,7 +250,29 @@ def taxonomy_template(*, species: tuple[str, ...]) -> bytes:
         extrasaction="raise",
     )
     writer.writeheader()
-    for label in sorted(set(species)):
+    for row in taxonomy_template_rows(species=species):
+        writer.writerow(row)
+    return output.getvalue().encode("utf-8")
+
+
+def taxonomy_template_rows(*, species: tuple[str, ...]) -> tuple[dict[str, str], ...]:
+    """Return editable taxonomy-template records for TSV and Excel exports.
+
+    Args:
+        species: Exact species labels present in the current resource.
+
+    Returns:
+        One deterministic, initially unmapped record per unique label.
+
+    Raises:
+        InputValidationError: If a species label is empty.
+    """
+
+    labels = tuple(sorted(set(species)))
+    if any(not label.strip() for label in labels):
+        raise InputValidationError("Taxonomy template species labels must be non-empty.")
+    rows = []
+    for label in labels:
         row = {column: "" for column in TAXONOMY_COLUMNS}
         row.update(
             {
@@ -260,8 +282,8 @@ def taxonomy_template(*, species: tuple[str, ...]) -> bytes:
                 "review_note": "Review required before descendant filtering.",
             }
         )
-        writer.writerow(row)
-    return output.getvalue().encode("utf-8")
+        rows.append(row)
+    return tuple(rows)
 
 
 def taxonomy_audit_rows(*, authority: TaxonomyAuthority) -> tuple[dict[str, Any], ...]:

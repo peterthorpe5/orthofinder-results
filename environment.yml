@@ -19,4 +19,5 @@ dependencies:
   - plotly>=6,<7
   - scipy>=1.14,<2
   - streamlit>=1.52,<2
+  - xlsxwriter>=3.2,<4
   - pip

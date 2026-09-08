@@ -15,16 +15,17 @@ from .evolutionary_page import (
     _store_active_group,
     _store_comparison_keys,
 )
+from .exports import render_table_downloads
 from .models import GroupKey, TaxonomySearchFilters
 from .queries import OrthoFinderQueryService
 from .taxonomy import (
+    TAXONOMY_COLUMNS,
     TaxonomyAuthority,
     parse_taxonomy_mapping,
     read_taxonomy_mapping,
     taxonomy_audit_rows,
-    taxonomy_template,
+    taxonomy_template_rows,
 )
-from .tsv import records_to_tsv
 
 _LOGGER = logging.getLogger("orthofinder_interrogation_app.taxonomy_page")
 _MODE_LABELS = {
@@ -63,6 +64,24 @@ _SPECIES_RESULT_HELP = {
     "Proteins from species": "Number of group proteins contributed by this species.",
     "Share of group": "Fraction of the group's proteins contributed by this species.",
 }
+_TAXONOMY_TEMPLATE_HELP = {
+    "workflow_species_label": "Exact species label used by this OrthoFinder resource.",
+    "source_species_name": "Species text inferred only for manual review, not accepted taxonomy.",
+    "accepted_species_name": "Human-reviewed accepted scientific name.",
+    "ncbi_taxon_id": "Human-reviewed positive NCBI taxonomy identifier for the species.",
+    "parent_taxon_id": "NCBI taxonomy identifier of the accepted immediate parent.",
+    "parent_taxon_name": "Accepted name of the immediate parent taxon.",
+    "lineage_taxon_ids": "Semicolon-separated ordered lineage of NCBI taxonomy identifiers.",
+    "lineage_names": "Semicolon-separated lineage names in the same order as lineage IDs.",
+    "mapping_status": "REVIEWED, PENDING_REVIEW, UNMAPPED or AMBIGUOUS.",
+    "mapping_method": "Method used to propose or confirm this mapping.",
+    "mapping_source": "Authoritative taxonomy source or database.",
+    "source_date": "Date on which the mapping source was accessed.",
+    "source_version": "Version or release identifier of the taxonomy source.",
+    "reviewed_by": "Person who accepted the mapping.",
+    "reviewed_at_utc": "UTC date and time at which the mapping was accepted.",
+    "review_note": "Free-text rationale, ambiguity or review action.",
+}
 
 
 def render_taxonomy_search(*, service: OrthoFinderQueryService, taxonomy_path_text: str) -> None:
@@ -88,11 +107,20 @@ def render_taxonomy_search(*, service: OrthoFinderQueryService, taxonomy_path_te
             """
         )
     species = service.list_species()
-    st.download_button(
-        "Download taxonomy review template",
-        data=taxonomy_template(species=species),
-        file_name=f"{service.resource.run_id}_taxonomy_mapping_template.tsv",
-        mime="text/tab-separated-values",
+    template_rows = taxonomy_template_rows(species=species)
+    render_table_downloads(
+        records=template_rows,
+        fieldnames=TAXONOMY_COLUMNS,
+        file_stem=f"{service.resource.run_id}_taxonomy_mapping_template",
+        key="taxonomy_template_download",
+        tsv_label="Download taxonomy review template as TSV",
+        excel_label="Download taxonomy review template as formatted Excel",
+        column_definitions=_TAXONOMY_TEMPLATE_HELP,
+        workbook_title=f"Taxonomy review template: {service.resource.run_id}",
+    )
+    st.caption(
+        "The formatted workbook is convenient for review; save the completed mapping as UTF-8 "
+        "TSV before loading it into the app or command-line mapper."
     )
     uploaded = st.file_uploader(
         "Use a reviewed taxonomy TSV for this browser session",
@@ -259,11 +287,14 @@ def render_taxonomy_search(*, service: OrthoFinderQueryService, taxonomy_path_te
         hide_index=True,
         column_config=_column_config(descriptions=_TAXONOMY_COLUMN_HELP),
     )
-    st.download_button(
-        "Download this taxonomic result page as TSV",
-        data=records_to_tsv(records=result.rows),
-        file_name=f"orthofinder_taxonomy_{mode.lower()}.tsv",
-        mime="text/tab-separated-values",
+    render_table_downloads(
+        records=displayed,
+        file_stem=f"orthofinder_taxonomy_{mode.lower()}",
+        key=f"taxonomy_result_{mode.lower()}",
+        tsv_label="Download this taxonomic result page as TSV",
+        excel_label="Download this taxonomic result page as formatted Excel",
+        column_definitions=_TAXONOMY_COLUMN_HELP,
+        workbook_title=f"OrthoFinder taxonomic search: {mode.lower()}",
     )
     labels_to_keys = {
         GroupKey(
@@ -294,14 +325,23 @@ def render_taxonomy_search(*, service: OrthoFinderQueryService, taxonomy_path_te
         _store_comparison_keys(keys=(*basket, key))
         st.success(f"Added to comparison workspace ({len(basket) + 1:,}/12).")
     st.subheader(key.display_label())
+    species_result = tuple(
+        _display_species_result_row(row=row) for row in service.get_group_species(key=key)
+    )
     st.dataframe(
-        tuple(
-            _display_species_result_row(row=row)
-            for row in service.get_group_species(key=key)
-        ),
+        species_result,
         width="stretch",
         hide_index=True,
         column_config=_column_config(descriptions=_SPECIES_RESULT_HELP),
+    )
+    render_table_downloads(
+        records=species_result,
+        file_stem=f"{key.group_id}_taxonomic_match_species",
+        key=f"taxonomy_species_{key.display_label()}",
+        tsv_label="Download selected group species as TSV",
+        excel_label="Download selected group species as formatted Excel",
+        column_definitions=_SPECIES_RESULT_HELP,
+        workbook_title=f"Taxonomic match species: {key.group_id}",
     )
 
 
@@ -352,11 +392,14 @@ def _render_mapping_audit(*, authority: TaxonomyAuthority) -> None:
             st.dataframe(unresolved, width="stretch", hide_index=True)
     with st.expander(f"Complete taxonomy mapping audit ({len(audit):,})", expanded=False):
         st.dataframe(audit, width="stretch", hide_index=True)
-        st.download_button(
-            "Download mapping audit as TSV",
-            data=records_to_tsv(records=audit),
-            file_name="orthofinder_taxonomy_mapping_audit.tsv",
-            mime="text/tab-separated-values",
+        render_table_downloads(
+            records=audit,
+            file_stem="orthofinder_taxonomy_mapping_audit",
+            key="taxonomy_mapping_audit",
+            tsv_label="Download mapping audit as TSV",
+            excel_label="Download mapping audit as formatted Excel",
+            column_definitions=_TAXONOMY_TEMPLATE_HELP,
+            workbook_title="OrthoFinder taxonomy mapping audit",
         )
 
 

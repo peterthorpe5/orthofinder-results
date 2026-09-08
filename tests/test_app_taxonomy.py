@@ -24,6 +24,7 @@ from orthofinder_interrogation_app.taxonomy import (
     read_taxonomy_mapping,
     taxonomy_audit_rows,
     taxonomy_template,
+    taxonomy_template_rows,
 )
 from orthofinder_results.errors import InputValidationError
 
@@ -93,6 +94,14 @@ def test_reviewed_mapping_descendants_options_audit_and_template(
         data=template, expected_species=("Species_A", "Species_B")
     )
     assert template_authority.summary()["UNMAPPED"] == 2
+    template_rows = taxonomy_template_rows(species=("Species_B", "Species_A"))
+    assert [row["workflow_species_label"] for row in template_rows] == [
+        "Species_A",
+        "Species_B",
+    ]
+    assert all(tuple(row) == TAXONOMY_COLUMNS for row in template_rows)
+    with pytest.raises(InputValidationError, match="must be non-empty"):
+        taxonomy_template_rows(species=("",))
 
 
 def test_contains_exclusive_near_exclusive_and_enrichment_queries(

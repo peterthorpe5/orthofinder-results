@@ -155,6 +155,46 @@ class SearchPage:
 
 
 @dataclass(frozen=True)
+class DistanceResultFilters:
+    """Exact filters for a complete persisted-distance result export.
+
+    Empty text selects every value. ``hierarchy_node=None`` selects every
+    species-tree level, whereas an empty string selects the ROOT collection.
+    """
+
+    group_type: str = ""
+    hierarchy_node: str | None = None
+    distance_method: str = ""
+    computation_status: str = ""
+
+    def __post_init__(self) -> None:
+        """Normalise text and reject NUL-containing filter values."""
+
+        for field_name in ("group_type", "distance_method", "computation_status"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str):
+                raise InputValidationError(f"{field_name} must be text.")
+            if "\x00" in value:
+                raise InputValidationError(f"{field_name} must not contain NUL characters.")
+            object.__setattr__(self, field_name, value.strip())
+        if self.hierarchy_node is not None:
+            if not isinstance(self.hierarchy_node, str):
+                raise InputValidationError("hierarchy_node must be text or None.")
+            if "\x00" in self.hierarchy_node:
+                raise InputValidationError("hierarchy_node must not contain NUL characters.")
+            object.__setattr__(self, "hierarchy_node", self.hierarchy_node.strip())
+
+
+@dataclass(frozen=True)
+class DistanceResultSet:
+    """Complete bounded persisted-distance rows selected for export."""
+
+    rows: tuple[dict[str, Any], ...]
+    total_rows: int
+    columns: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class TaxonomySearchFilters:
     """Validated controls for one descendant-aware taxonomic search."""
 

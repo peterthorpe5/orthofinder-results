@@ -9,6 +9,7 @@ from typing import Any, Mapping
 
 import streamlit as st
 
+from orthofinder_interrogation_app.all_results_page import render_all_distance_results
 from orthofinder_interrogation_app.comparison_page import render_cluster_comparison
 from orthofinder_interrogation_app.distance_data import default_cache_directory
 from orthofinder_interrogation_app.evolutionary_page import (
@@ -17,6 +18,7 @@ from orthofinder_interrogation_app.evolutionary_page import (
     _store_comparison_keys,
     render_evolutionary_views,
 )
+from orthofinder_interrogation_app.exports import render_table_downloads
 from orthofinder_interrogation_app.launcher import (
     CACHE_ENVIRONMENT_VARIABLE,
     LOG_ENVIRONMENT_VARIABLE,
@@ -30,7 +32,6 @@ from orthofinder_interrogation_app.queries import (
 )
 from orthofinder_interrogation_app.resource import open_resource
 from orthofinder_interrogation_app.taxonomy_page import render_taxonomy_search
-from orthofinder_interrogation_app.tsv import records_to_tsv
 from orthofinder_results import __version__
 from orthofinder_results.errors import OrthoFinderResultsError
 from orthofinder_results.io_utils import configure_logging
@@ -41,6 +42,7 @@ _PAGES = (
     "Find groups",
     "Cluster explorer",
     "Compare clusters",
+    "All distance results",
     "Taxonomic search",
     "Offline report",
     "Help",
@@ -50,6 +52,7 @@ _PAGE_LABELS = {
     "Find groups": "Find groups",
     "Cluster explorer": "Explore one cluster",
     "Compare clusters": "Compare clusters",
+    "All distance results": "All distance results",
     "Taxonomic search": "Taxonomic search",
     "Offline report": "Download report",
     "Help": "Help & glossary",
@@ -200,6 +203,8 @@ def main() -> None:
                 service=service,
                 cache_dir=cache_dir,
             )
+        elif page_name == "All distance results":
+            render_all_distance_results(service=service)
         elif page_name == "Taxonomic search":
             render_taxonomy_search(
                 service=service,
@@ -345,7 +350,7 @@ def _render_overview(*, service: OrthoFinderQueryService) -> None:
             "need a schema-3 rebuild before the app can calculate distances on demand."
         )
     st.subheader("Choose your question")
-    actions = st.columns(4)
+    actions = st.columns(5)
     actions[0].markdown("#### Which groups contain my species?")
     actions[0].write(
         "Require one, every, or exactly a set of sampled species, and reject unwanted species."
@@ -370,6 +375,12 @@ def _render_overview(*, service: OrthoFinderQueryService) -> None:
     )
     if actions[3].button("Compare clusters", key="summary_compare"):
         _navigate_to(page="Compare clusters")
+    actions[4].markdown("#### Which clusters have distance results?")
+    actions[4].write(
+        "Select columns and export every persisted cluster-distance summary in one table."
+    )
+    if actions[4].button("All distance results", key="summary_all_results"):
+        _navigate_to(page="All distance results")
 
     with st.expander("Detailed group collections and hierarchy levels", expanded=False):
         st.write(
@@ -574,17 +585,21 @@ def _render_group_search(*, service: OrthoFinderQueryService) -> None:
     if not result.rows:
         st.warning("No groups match the selected filters.")
         return
+    displayed_results = tuple(_display_group_row(row=row) for row in result.rows)
     st.dataframe(
-        tuple(_display_group_row(row=row) for row in result.rows),
+        displayed_results,
         width="stretch",
         hide_index=True,
         column_config=_column_config(descriptions=_GROUP_COLUMN_HELP),
     )
-    st.download_button(
-        "Download this result page as TSV",
-        data=records_to_tsv(records=result.rows),
-        file_name="orthofinder_group_search.tsv",
-        mime="text/tab-separated-values",
+    render_table_downloads(
+        records=displayed_results,
+        file_stem="orthofinder_group_search",
+        key="group_search_download",
+        tsv_label="Download this result page as TSV",
+        excel_label="Download this result page as formatted Excel",
+        column_definitions=_GROUP_COLUMN_HELP,
+        workbook_title="OrthoFinder group search",
     )
     labels_to_keys = {
         _row_group_key(row=row).display_label(): _row_group_key(row=row)
@@ -679,31 +694,39 @@ def _render_group_detail(*, service: OrthoFinderQueryService, key: GroupKey) -> 
     member_rows = service.get_group_members(key=key)
     species_tab, member_tab = st.tabs(("Species copy counts", "Protein members"))
     with species_tab:
+        displayed_species = tuple(_display_species_row(row=row) for row in species_rows)
         st.dataframe(
-            tuple(_display_species_row(row=row) for row in species_rows),
+            displayed_species,
             width="stretch",
             hide_index=True,
             column_config=_column_config(descriptions=_SPECIES_COLUMN_HELP),
         )
-        st.download_button(
-            "Download species copy counts as TSV",
-            data=records_to_tsv(records=species_rows),
-            file_name=f"{key.group_id}_species_copy_counts.tsv",
-            mime="text/tab-separated-values",
+        render_table_downloads(
+            records=displayed_species,
+            file_stem=f"{key.group_id}_species_copy_counts",
+            key=f"group_species_{key.display_label()}",
+            tsv_label="Download species copy counts as TSV",
+            excel_label="Download species copy counts as formatted Excel",
+            column_definitions=_SPECIES_COLUMN_HELP,
+            workbook_title=f"Species copy counts: {key.group_id}",
         )
     with member_tab:
+        displayed_members = tuple(_display_member_row(row=row) for row in member_rows)
         st.dataframe(
-            tuple(_display_member_row(row=row) for row in member_rows),
+            displayed_members,
             width="stretch",
             hide_index=True,
             column_config=_column_config(descriptions=_MEMBER_COLUMN_HELP),
         )
         if len(member_rows) == group["member_count"]:
-            st.download_button(
-                "Download complete membership as TSV",
-                data=records_to_tsv(records=member_rows),
-                file_name=f"{key.group_id}_members.tsv",
-                mime="text/tab-separated-values",
+            render_table_downloads(
+                records=displayed_members,
+                file_stem=f"{key.group_id}_members",
+                key=f"group_members_{key.display_label()}",
+                tsv_label="Download complete membership as TSV",
+                excel_label="Download complete membership as formatted Excel",
+                column_definitions=_MEMBER_COLUMN_HELP,
+                workbook_title=f"Group membership: {key.group_id}",
             )
         else:
             st.warning(
@@ -748,6 +771,8 @@ def _render_help() -> None:
             3. Send an interesting result to **Explore one cluster** for distances and trees.
             4. Add 2–12 groups to **Compare clusters** when the same distance method and
                sampling scope are scientifically comparable.
+            5. Use **All distance results** to select columns and export every cluster with a
+               persisted distance summary as formatted Excel or TSV.
 
             **Taxonomic search** is a separate, stricter workflow because descendant claims
             require a reviewed species-to-taxonomy mapping.
@@ -828,8 +853,9 @@ def _render_help() -> None:
             Schema 3 stores checksum-bound portable gene trees rather than billions of pair
             matrices. The app can calculate one bounded matrix when requested and caches it in
             a user sidecar outside the immutable resource. Schema 2 remains readable but normally
-            exposes distances only for its original pilot groups. Raw method, status, source and
-            cache codes remain available under **Technical analysis details** and in TSV exports.
+            exposes distances only for its original pilot groups. Method, status, source and
+            cache details remain available under **Technical analysis details** and in relevant
+            downloadable tables.
             """
         )
 

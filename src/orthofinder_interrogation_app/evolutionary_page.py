@@ -12,6 +12,7 @@ from orthofinder_results.errors import InputValidationError, OrthoFinderResultsE
 
 from .dispersion import classical_pcoa, member_dispersion_rows, species_dispersion_rows
 from .distance_data import DistanceAnalysisProvider, GroupAnalysis
+from .exports import render_table_downloads
 from .figures import (
     distance_distribution_figure,
     distance_matrix_figure,
@@ -27,10 +28,10 @@ from .figures import (
     species_pair_heatmap_figure,
 )
 from .force_view import force_directed_html
+from .guidance import render_graph_guidance
 from .models import GroupKey
 from .queries import OrthoFinderQueryService
 from .report_data import VisualisationCatalog, load_visualisation_catalog
-from .tsv import records_to_tsv
 
 _LOGGER = logging.getLogger("orthofinder_interrogation_app.evolutionary_page")
 ACTIVE_GROUP_STATE = "orthofinder_active_group"
@@ -463,6 +464,7 @@ def _render_force_network(
     except InputValidationError as error:
         st.warning(str(error))
         return
+    render_graph_guidance(key="interactive_network")
     st.iframe(document, height=760)
     metrics = _required_mapping(entry=entry, key="networkMetrics")
     st.caption(
@@ -505,11 +507,13 @@ def _render_dispersion(
             - **Species-pair heatmap:** compares average distance among each pair of species.
             """
         )
+    render_graph_guidance(key="distance_distribution")
     st.plotly_chart(
         distance_distribution_figure(rows=analysis.distances),
         width="stretch",
         config={"displaylogo": False},
     )
+    render_graph_guidance(key="member_dispersion")
     st.plotly_chart(
         member_dispersion_figure(rows=member_rows, selected_members=linked),
         width="stretch",
@@ -517,6 +521,7 @@ def _render_dispersion(
     )
     secondary = st.tabs(("Distance from sample medoid", "Species-pair heatmap", "Data tables"))
     with secondary[0]:
+        render_graph_guidance(key="medoid_distance")
         st.plotly_chart(
             medoid_distance_figure(rows=analysis.distances, member_rows=member_rows),
             width="stretch",
@@ -527,6 +532,7 @@ def _render_dispersion(
             "deterministically sampled members. It is not an ancestor."
         )
     with secondary[1]:
+        render_graph_guidance(key="species_pair_heatmap")
         st.plotly_chart(
             species_pair_heatmap_figure(rows=analysis.distances),
             width="stretch",
@@ -541,11 +547,17 @@ def _render_dispersion(
             hide_index=True,
             column_config=_column_config(descriptions=_MEMBER_DISPERSION_HELP),
         )
-        st.download_button(
-            "Download per-member dispersion as TSV",
-            data=records_to_tsv(records=member_rows),
-            file_name=f"{analysis.key.group_id}_member_dispersion.tsv",
-            mime="text/tab-separated-values",
+        displayed_members = tuple(
+            _display_member_dispersion_row(row=row) for row in member_rows
+        )
+        render_table_downloads(
+            records=displayed_members,
+            file_stem=f"{analysis.key.group_id}_member_dispersion",
+            key=f"member_dispersion_{_state_token(key=analysis.key)}",
+            tsv_label="Download per-protein dispersion as TSV",
+            excel_label="Download per-protein dispersion as formatted Excel",
+            column_definitions=_MEMBER_DISPERSION_HELP,
+            workbook_title=f"Per-protein dispersion: {analysis.key.group_id}",
         )
         st.subheader("Species-pair distance summary")
         st.dataframe(
@@ -554,11 +566,17 @@ def _render_dispersion(
             hide_index=True,
             column_config=_column_config(descriptions=_SPECIES_DISPERSION_HELP),
         )
-        st.download_button(
-            "Download species-pair dispersion as TSV",
-            data=records_to_tsv(records=species_rows),
-            file_name=f"{analysis.key.group_id}_species_pair_dispersion.tsv",
-            mime="text/tab-separated-values",
+        displayed_species = tuple(
+            _display_species_dispersion_row(row=row) for row in species_rows
+        )
+        render_table_downloads(
+            records=displayed_species,
+            file_stem=f"{analysis.key.group_id}_species_pair_dispersion",
+            key=f"species_dispersion_{_state_token(key=analysis.key)}",
+            tsv_label="Download species-pair dispersion as TSV",
+            excel_label="Download species-pair dispersion as formatted Excel",
+            column_definitions=_SPECIES_DISPERSION_HELP,
+            workbook_title=f"Species-pair dispersion: {analysis.key.group_id}",
         )
 
 
@@ -628,6 +646,7 @@ def _render_enhanced_pcoa(
         )
     )
     with views[0]:
+        render_graph_guidance(key="pcoa_3d")
         st.plotly_chart(
             pcoa_3d_figure(geometry=geometry, selected_members=linked),
             width="stretch",
@@ -652,6 +671,7 @@ def _render_enhanced_pcoa(
                 help="Choose a different positive-coordinate axis.",
             )
         )
+        render_graph_guidance(key="pcoa_axes")
         st.plotly_chart(
             pcoa_axis_figure(
                 geometry=geometry,
@@ -719,11 +739,14 @@ def _render_pair_table(*, analysis: GroupAnalysis) -> None:
         hide_index=True,
         column_config=_column_config(descriptions=_PAIR_DISTANCE_HELP),
     )
-    st.download_button(
-        "Download filtered member-to-member distances as TSV",
-        data=records_to_tsv(records=filtered),
-        file_name=f"{analysis.key.group_id}_member_pair_distances.tsv",
-        mime="text/tab-separated-values",
+    render_table_downloads(
+        records=display,
+        file_stem=f"{analysis.key.group_id}_member_pair_distances",
+        key=f"pair_distances_{_state_token(key=analysis.key)}",
+        tsv_label="Download filtered protein-pair distances as TSV",
+        excel_label="Download filtered protein-pair distances as formatted Excel",
+        column_definitions=_PAIR_DISTANCE_HELP,
+        workbook_title=f"Protein-pair distances: {analysis.key.group_id}",
     )
 
 
@@ -939,6 +962,7 @@ def _render_pcoa(*, entry: dict[str, Any], linked: frozenset[str]) -> None:
         st.info(explanation)
     else:
         st.success(explanation)
+    render_graph_guidance(key="pcoa_2d")
     st.plotly_chart(
         pcoa_figure(entry=entry, selected_members=linked),
         width="stretch",
@@ -959,6 +983,7 @@ def _render_shepard(*, entry: dict[str, Any]) -> None:
         "Points close to the diagonal have similar exact and plotted distances. Broad "
         "scatter or systematic curvature reveals where the PCoA view distorts them."
     )
+    render_graph_guidance(key="shepard")
     st.plotly_chart(figure, width="stretch", config={"displaylogo": False})
     st.caption(
         f"Deterministic {int(projection.get('shepard_point_count', 0)):,}-point summary "
@@ -988,6 +1013,7 @@ def _render_phylogram(*, entry: dict[str, Any], linked: frozenset[str]) -> None:
     except InputValidationError as error:
         st.warning(str(error))
         return
+    render_graph_guidance(key="phylogram")
     st.plotly_chart(figure, width="stretch", config={"displaylogo": False})
     authority = tree.get("treeAuthority", "RESOLVED_GENE_TREE")
     st.caption(
@@ -1020,6 +1046,7 @@ def _render_matrix(*, entry: dict[str, Any], linked: frozenset[str]) -> None:
     except InputValidationError as error:
         st.warning(str(error))
         return
+    render_graph_guidance(key="distance_heatmap")
     st.plotly_chart(figure, width="stretch", config={"displaylogo": False})
     matrix = _required_mapping(entry=entry, key="distanceMatrix")
     st.caption(
@@ -1047,6 +1074,7 @@ def _render_topology(
     except InputValidationError as error:
         st.warning(str(error))
         return
+    render_graph_guidance(key="nearest_neighbour")
     st.plotly_chart(figure, width="stretch", config={"displaylogo": False})
     st.caption(
         f"Solid edges retain up to {nearest_neighbours:,} neighbours. Static layout "
@@ -1072,11 +1100,15 @@ def _render_selected_members(
         hide_index=True,
         column_config=_column_config(descriptions=_MEMBER_HELP),
     )
-    st.download_button(
-        "Download displayed member selection as TSV",
-        data=records_to_tsv(records=visible),
-        file_name="orthofinder_displayed_member_selection.tsv",
-        mime="text/tab-separated-values",
+    displayed = tuple(_display_member_row(row=row) for row in visible)
+    render_table_downloads(
+        records=displayed,
+        file_stem="orthofinder_displayed_protein_selection",
+        key="displayed_member_selection",
+        tsv_label="Download displayed protein selection as TSV",
+        excel_label="Download displayed protein selection as formatted Excel",
+        column_definitions=_MEMBER_HELP,
+        workbook_title="OrthoFinder displayed protein selection",
     )
 
 
