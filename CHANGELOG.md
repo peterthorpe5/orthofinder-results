@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+## 0.4.0 - 2026-09-07
+
+- Bump the physical resource contract to schema 3 and publish one compressed,
+  checksum-bound portable Newick payload per preferred resolved or fallback
+  original gene tree.
+- Calculate exact bounded patristic matrices lazily for selected groups without
+  modifying the completed resource, including exact HOG membership restriction,
+  canonical/internal/species-prefixed leaf resolution and explicit failures.
+- Add content-addressed, gzip-compressed, atomically published sidecar caches
+  keyed by run, composite group identity, tree checksum and calculation controls;
+  default to persistent macOS or XDG user cache locations rather than `/tmp`.
+- Preserve schema-2 pilot matrices and schema-3 persisted DuckDB pairs as
+  higher-priority distance authorities for backward compatibility.
+- Restore a self-contained draggable force-directed view with separately
+  toggleable layout-only connectors and retain the static nearest-neighbour view.
+- Add rotatable 3D and selectable-axis PCoA alongside the original 2D diagnostic,
+  with separate 2D/3D inertia, stress and distance-correlation reporting.
+- Add within/between histograms, violins and empirical CDFs; per-member
+  mean/median/SD and nearest-neighbour summaries; medoid-distance profiles; and
+  species-pair mean-distance heatmaps and TSV exports.
+- Add filtered exact member-to-member distance tables and linked member/species
+  selection across the cluster explorer.
+- Add a 2–12-cluster comparison workspace for mean, population SD, median,
+  complete displayed distributions and independent stable-colour PCoA panels.
+- Redesign the overview and group-search flow around actionable find, explore and
+  compare tasks while retaining `ANY`, `ALL`, `EXACT_SET` and rejected-species
+  filters.
+- Add the dataset-generic `orthofinder-taxonomy-map` command, which resolves the
+  current resource's exact species labels against a local NCBI taxdump and emits
+  only `PENDING_REVIEW`, `AMBIGUOUS` or `UNMAPPED` candidates until human review.
+- Expand unit, integration and Streamlit end-to-end tests to cover the new
+  portable backend, cache corruption, taxonomy authority, dispersion mathematics,
+  visual repertoire, force-network defences and comparison workflow.
+
 ## 0.3.0 - 2026-09-07
 
 - Port the bounded distance pilot into separate application pages for PCoA and

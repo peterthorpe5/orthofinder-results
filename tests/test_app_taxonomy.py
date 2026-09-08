@@ -65,6 +65,7 @@ def test_reviewed_mapping_descendants_options_audit_and_template(
     authority = _authority(path=taxonomy_mapping_file)
     assert authority.summary() == {
         "REVIEWED": 3,
+        "PENDING_REVIEW": 0,
         "UNMAPPED": 0,
         "AMBIGUOUS": 1,
         "MISSING": 0,
@@ -369,6 +370,7 @@ def test_results_feb26_example_mapping_is_complete_and_auditable() -> None:
     assert len(expected) == 60
     assert authority.summary() == {
         "REVIEWED": 59,
+        "PENDING_REVIEW": 0,
         "UNMAPPED": 1,
         "AMBIGUOUS": 0,
         "MISSING": 0,

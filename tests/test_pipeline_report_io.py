@@ -139,7 +139,8 @@ def test_pipeline_publishes_queryable_offline_resource(
         ).fetchone()[0] > 0
         assert connection.execute(
             "SELECT schema_version FROM resource_metadata"
-        ).fetchone()[0] == 2
+        ).fetchone()[0] == 3
+        assert connection.execute("SELECT count(*) FROM tree_payloads").fetchone()[0] == 1
     finally:
         connection.close()
     checks = list(read_tsv(path=output / "qc/validation_checks.tsv"))

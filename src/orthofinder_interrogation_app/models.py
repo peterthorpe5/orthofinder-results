@@ -38,6 +38,7 @@ class ResourceIdentity:
         adapter_name: Version-specific parser adapter.
         primary_group_authority: Primary HOG or legacy group authority.
         counts: Manifest row and capability counts.
+        relations: Exact DuckDB relations available to capability-driven pages.
     """
 
     resource_path: Path
@@ -50,6 +51,7 @@ class ResourceIdentity:
     adapter_name: str
     primary_group_authority: str
     counts: dict[str, int] = field(default_factory=dict)
+    relations: frozenset[str] = field(default_factory=frozenset)
 
 
 @dataclass(frozen=True)

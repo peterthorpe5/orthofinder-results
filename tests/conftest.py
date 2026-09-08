@@ -13,6 +13,7 @@ import duckdb
 import pytest
 
 from orthofinder_interrogation_app.taxonomy import TAXONOMY_COLUMNS
+from orthofinder_results.pipeline import run_pipeline
 
 
 @pytest.fixture
@@ -111,6 +112,37 @@ def orthofinder3_results(tmp_path: Path) -> Path:
     """Return a compact HOG-only OrthoFinder 3 fixture."""
 
     return make_results(tmp_path, version="3.1.0", include_legacy=False)
+
+
+@pytest.fixture
+def schema3_resource(
+    orthofinder2_results: Path,
+    persistent_test_root: Path,
+) -> Path:
+    """Publish a compact schema-3 resource with one portable resolved tree."""
+
+    output = persistent_test_root / "schema3_resource"
+    run_pipeline(
+        results_dir=orthofinder2_results,
+        output_dir=output,
+        run_id="schema3-run",
+        work_dir=persistent_test_root / "schema3_work",
+        alignment_dir=None,
+        distance_source="AUTO",
+        distance_group_type="AUTO",
+        distance_hierarchy_node="N0",
+        distance_max_groups=0,
+        distance_max_members=10,
+        parse_gene_trees=True,
+        report_max_statistic_rows=100,
+        report_max_groups=10,
+        report_max_members=10,
+        report_nearest_neighbours=2,
+        resume=False,
+        force=False,
+        verbose=False,
+    )
+    return output
 
 
 @pytest.fixture

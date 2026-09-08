@@ -15,12 +15,14 @@ from typing import Sequence
 from orthofinder_results.errors import InputValidationError, OrthoFinderResultsError
 from orthofinder_results.io_utils import configure_logging
 
+from .distance_data import default_cache_directory
 from .resource import open_resource
 
 _LOGGER = logging.getLogger("orthofinder_interrogation_app.launcher")
 RESOURCE_ENVIRONMENT_VARIABLE = "ORTHOFINDER_RESULTS_RESOURCE"
 LOG_ENVIRONMENT_VARIABLE = "ORTHOFINDER_RESULTS_APP_LOG"
 TAXONOMY_ENVIRONMENT_VARIABLE = "ORTHOFINDER_RESULTS_TAXONOMY"
+CACHE_ENVIRONMENT_VARIABLE = "ORTHOFINDER_RESULTS_CACHE"
 DEFAULT_PORT = 8501
 MAX_AUTOMATIC_PORT_ATTEMPTS = 100
 
@@ -56,6 +58,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--taxonomy-map",
         type=Path,
         help="Optional reviewed taxonomy TSV sidecar; the resource is never modified.",
+    )
+    parser.add_argument(
+        "--cache-dir",
+        type=Path,
+        help=(
+            "Persistent sidecar cache for on-demand analyses. Defaults to the macOS "
+            "Library cache or the Linux/XDG user cache; /tmp is never assumed."
+        ),
     )
     parser.add_argument(
         "--headless",
@@ -98,6 +108,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     environment = os.environ.copy()
     environment[RESOURCE_ENVIRONMENT_VARIABLE] = str(resource.resource_path)
+    cache_dir = (
+        arguments.cache_dir.expanduser().resolve()
+        if arguments.cache_dir is not None
+        else default_cache_directory().resolve()
+    )
+    environment[CACHE_ENVIRONMENT_VARIABLE] = str(cache_dir)
     if arguments.log_file is not None:
         environment[LOG_ENVIRONMENT_VARIABLE] = str(arguments.log_file.expanduser().resolve())
     if arguments.taxonomy_map is not None:
@@ -123,10 +139,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "false",
     ]
     _LOGGER.info(
-        "Launching read-only application: run=%s, address=%s, port=%s",
+        "Launching read-only application: run=%s, address=%s, port=%s, cache=%s",
         resource.run_id,
         arguments.server_address,
         selected_port,
+        cache_dir,
     )
     try:
         completed = subprocess.run(command, check=False, env=environment)

@@ -44,6 +44,7 @@ def test_resource_selectors_and_overview_are_complete(
         "group_species_statistic_count": 8,
         "species_count": 4,
         "distance_group_count": 2,
+        "portable_tree_count": 0,
     }
 
 

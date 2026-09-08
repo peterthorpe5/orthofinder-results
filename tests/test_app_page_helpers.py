@@ -10,13 +10,15 @@ from unittest.mock import MagicMock
 import pytest
 
 from orthofinder_interrogation_app import evolutionary_page, taxonomy_page
+from orthofinder_interrogation_app.distance_data import GroupAnalysis
+from orthofinder_interrogation_app.models import GroupKey
 from orthofinder_interrogation_app.report_data import (
     VisualisationCatalog,
     load_visualisation_catalog,
 )
 from orthofinder_interrogation_app.resource import open_resource
 from orthofinder_interrogation_app.taxonomy import taxonomy_template
-from orthofinder_results.errors import InputValidationError
+from orthofinder_results.errors import DistanceCalculationError, InputValidationError
 
 
 def _entry(*, application_resource: Path) -> dict:
@@ -193,9 +195,217 @@ def test_taxonomy_page_invalid_and_unreviewed_mapping_states(
 
     streamlit.reset_mock()
     streamlit.file_uploader.return_value = None
-    streamlit.columns.return_value = [MagicMock() for _ in range(4)]
+    streamlit.columns.return_value = [MagicMock() for _ in range(5)]
     mapping = tmp_path / "unreviewed.tsv"
     mapping.write_bytes(taxonomy_template(species=("Species_A",)))
     taxonomy_page.render_taxonomy_search(service=service, taxonomy_path_text=str(mapping))
     assert streamlit.warning.called
     service.search_taxonomy_groups.assert_not_called()
+
+
+def test_report_only_success_dispatches_every_visual_panel(
+    application_resource: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The compatibility renderer retains all five original visual panels."""
+
+    resource = open_resource(path=application_resource)
+    assert resource.report_path is not None
+    catalog = load_visualisation_catalog(
+        report_path=resource.report_path,
+        expected_run_id=resource.run_id,
+    )
+    streamlit = MagicMock()
+    streamlit.selectbox.return_value = catalog.labels()[0]
+    streamlit.tabs.return_value = [MagicMock() for _ in range(5)]
+    monkeypatch.setattr(evolutionary_page, "st", streamlit)
+    panel_names = (
+        "_render_distance_scope",
+        "_render_pcoa",
+        "_render_shepard",
+        "_render_phylogram",
+        "_render_matrix",
+        "_render_topology",
+        "_render_selected_members",
+    )
+    panels = {name: MagicMock() for name in panel_names}
+    for name, panel in panels.items():
+        monkeypatch.setattr(evolutionary_page, name, panel)
+    evolutionary_page._render_report_only(resource=resource, catalog=catalog)
+    assert all(panel.called for panel in panels.values())
+
+
+def test_explorer_handles_no_selection_and_backend_calculation_error(
+    application_resource: Path,
+    persistent_test_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No group and failed portable-tree calculations both remain visible states."""
+
+    resource = open_resource(path=application_resource)
+    service = MagicMock()
+    service.resource = resource
+    streamlit = MagicMock()
+    monkeypatch.setattr(evolutionary_page, "st", streamlit)
+    monkeypatch.setattr(evolutionary_page, "_load_catalog", lambda **kwargs: None)
+    monkeypatch.setattr(evolutionary_page, "_select_group", lambda **kwargs: None)
+    evolutionary_page.render_evolutionary_views(
+        resource=resource,
+        service=service,
+        cache_dir=persistent_test_root / "cache",
+    )
+    assert streamlit.info.called
+
+    key = GroupKey("test_run", "HOG", "N0", "N0.HOG1")
+    monkeypatch.setattr(evolutionary_page, "_select_group", lambda **kwargs: key)
+    columns = [MagicMock() for _ in range(4)]
+    columns[0].select_slider.return_value = 250
+    columns[1].slider.return_value = 3
+    columns[2].checkbox.return_value = False
+    streamlit.columns.return_value = columns
+    failing_provider = MagicMock()
+    failing_provider.analyse.side_effect = DistanceCalculationError("tree mismatch")
+    monkeypatch.setattr(
+        evolutionary_page,
+        "DistanceAnalysisProvider",
+        lambda **kwargs: failing_provider,
+    )
+    evolutionary_page.render_evolutionary_views(
+        resource=resource,
+        service=service,
+        cache_dir=persistent_test_root / "cache",
+    )
+    assert any("tree mismatch" in str(call) for call in streamlit.warning.call_args_list)
+
+
+def test_catalog_filter_and_streamlit_state_helpers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Composite keys, pair filters and serialisable state are bounded defensively."""
+
+    catalog = VisualisationCatalog(
+        run_id="run",
+        networks={
+            "bad": {},
+            "|N0|missing_type": {},
+            "HOG|N0|good": {},
+        },
+        nearest_neighbours=3,
+    )
+    assert evolutionary_page._catalog_keys(catalog=None, run_id="run") == ()
+    assert evolutionary_page._catalog_keys(catalog=catalog, run_id="run") == (
+        GroupKey("run", "HOG", "N0", "good"),
+    )
+    rows = (
+        {
+            "member_a": "alpha",
+            "member_b": "beta",
+            "species_a": "A",
+            "species_b": "A",
+            "distance": 0.1,
+        },
+        {
+            "member_a": "alpha",
+            "member_b": "gamma",
+            "species_a": "A",
+            "species_b": "B",
+            "distance": 0.2,
+        },
+    )
+    assert len(
+        evolutionary_page._filter_distance_rows(
+            rows=rows,
+            member_text="ALPHA",
+            species=("B",),
+            pair_scope="Between species",
+        )
+    ) == 1
+    assert len(
+        evolutionary_page._filter_distance_rows(
+            rows=rows,
+            member_text="missing",
+            species=(),
+            pair_scope="All pairs",
+        )
+    ) == 0
+    assert len(
+        evolutionary_page._filter_distance_rows(
+            rows=rows,
+            member_text="",
+            species=(),
+            pair_scope="Within species",
+        )
+    ) == 1
+    with pytest.raises(InputValidationError, match="Unsupported pair scope"):
+        evolutionary_page._filter_distance_rows(
+            rows=rows,
+            member_text="",
+            species=(),
+            pair_scope="Other",
+        )
+
+    streamlit = MagicMock()
+    streamlit.session_state = {}
+    monkeypatch.setattr(evolutionary_page, "st", streamlit)
+    key = GroupKey("run", "HOG", "N0", "good")
+    assert evolutionary_page._state_group() is None
+    streamlit.session_state[evolutionary_page.ACTIVE_GROUP_STATE] = {"run_id": "run"}
+    assert evolutionary_page._state_group() is None
+    evolutionary_page._store_active_group(key=key)
+    assert evolutionary_page._state_group() == key
+    streamlit.session_state[evolutionary_page.COMPARISON_STATE] = "wrong"
+    assert evolutionary_page._comparison_keys() == ()
+    streamlit.session_state[evolutionary_page.COMPARISON_STATE] = [
+        "wrong",
+        {"run_id": "run"},
+        evolutionary_page._key_record(key=key),
+        evolutionary_page._key_record(key=key),
+    ]
+    assert evolutionary_page._comparison_keys() == (key,)
+    evolutionary_page._store_comparison_keys(keys=(key, key))
+    assert evolutionary_page._comparison_keys() == (key,)
+    too_many = tuple(GroupKey("run", "HOG", "N0", f"g{index}") for index in range(13))
+    with pytest.raises(InputValidationError, match="exceed 12"):
+        evolutionary_page._store_comparison_keys(keys=too_many)
+    assert evolutionary_page._state_token(key=key) == "HOG_N0_good"
+
+
+def test_comparison_button_and_dispersion_failure_paths(
+    application_resource: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Comparison membership and malformed exact matrices never fail silently."""
+
+    entry = _entry(application_resource=application_resource)
+    key = GroupKey("test_run", "HOG", "N0", "N0.HOG1")
+    streamlit = MagicMock()
+    streamlit.session_state = {}
+    streamlit.button.return_value = True
+    monkeypatch.setattr(evolutionary_page, "st", streamlit)
+    evolutionary_page._comparison_control(key=key)
+    assert evolutionary_page._comparison_keys() == (key,)
+    evolutionary_page._comparison_control(key=key)
+    assert streamlit.success.call_count == 2
+
+    streamlit.columns.side_effect = lambda value: [
+        MagicMock() for _ in range(value if isinstance(value, int) else len(value))
+    ]
+    malformed = GroupAnalysis(
+        key=key,
+        group={},
+        members=({"member_id": "alpha_1", "species_label": "Species_A"},),
+        distances=(),
+        summary={},
+        visual_entry=entry,
+        source="fixture",
+        tree_authority="",
+        cache_status="NOT_APPLICABLE",
+    )
+    evolutionary_page._render_analysis(analysis=malformed, nearest_neighbours=3)
+    assert streamlit.error.called
+    evolutionary_page._render_force_network(
+        entry={"nodes": "wrong", "edges": []},
+        linked=frozenset(),
+        nearest_neighbours=3,
+    )
+    assert streamlit.warning.called

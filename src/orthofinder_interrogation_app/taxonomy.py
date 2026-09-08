@@ -18,7 +18,9 @@ from orthofinder_results.errors import InputValidationError
 
 _LOGGER = logging.getLogger("orthofinder_interrogation_app.taxonomy")
 MAX_TAXONOMY_BYTES = 5 * 1024 * 1024
-MAPPING_STATUSES = frozenset({"REVIEWED", "UNMAPPED", "AMBIGUOUS"})
+MAPPING_STATUSES = frozenset(
+    {"REVIEWED", "PENDING_REVIEW", "UNMAPPED", "AMBIGUOUS"}
+)
 TAXONOMY_COLUMNS = (
     "workflow_species_label",
     "source_species_name",
@@ -110,7 +112,13 @@ class TaxonomyAuthority:
     def summary(self) -> dict[str, int]:
         """Return complete mapping-status counts including missing labels."""
 
-        counts = {"REVIEWED": 0, "UNMAPPED": 0, "AMBIGUOUS": 0, "MISSING": 0}
+        counts = {
+            "REVIEWED": 0,
+            "PENDING_REVIEW": 0,
+            "UNMAPPED": 0,
+            "AMBIGUOUS": 0,
+            "MISSING": 0,
+        }
         by_label = {row.workflow_species_label: row for row in self.records}
         for species in self.expected_species:
             row = by_label.get(species)
@@ -386,29 +394,23 @@ def _parse_record(*, raw_row: dict[str | None, str | None], line_number: int) ->
         raise InputValidationError(
             f"Taxonomy TSV line {line_number} has unequal lineage ID/name counts."
         )
-    if status == "REVIEWED":
-        required = (
+    if status in {"REVIEWED", "PENDING_REVIEW"}:
+        candidate_required = (
             "source_species_name",
             "accepted_species_name",
             "mapping_method",
             "mapping_source",
             "source_date",
             "source_version",
-            "reviewed_by",
-            "reviewed_at_utc",
         )
-        absent = [column for column in required if not row[column]]
+        absent = [column for column in candidate_required if not row[column]]
         if taxon_id is None:
             absent.append("ncbi_taxon_id")
         if absent:
             raise InputValidationError(
-                f"Reviewed taxonomy row {line_number} lacks: " + "; ".join(absent)
+                f"Taxonomy candidate row {line_number} lacks: " + "; ".join(absent)
             )
-        _validate_dates(
-            source_date=row["source_date"],
-            reviewed_at_utc=row["reviewed_at_utc"],
-            line_number=line_number,
-        )
+        _validate_source_date(source_date=row["source_date"], line_number=line_number)
         if taxon_id in lineage_ids:
             raise InputValidationError(
                 f"Taxonomy TSV line {line_number} repeats its own taxon ID in its lineage."
@@ -421,6 +423,19 @@ def _parse_record(*, raw_row: dict[str | None, str | None], line_number: int) ->
             raise InputValidationError(
                 f"Taxonomy TSV line {line_number} must supply parent ID and name together."
             )
+    if status == "REVIEWED":
+        absent_review = [
+            column for column in ("reviewed_by", "reviewed_at_utc") if not row[column]
+        ]
+        if absent_review:
+            raise InputValidationError(
+                f"Reviewed taxonomy row {line_number} lacks: "
+                + "; ".join(absent_review)
+            )
+        _validate_review_timestamp(
+            reviewed_at_utc=row["reviewed_at_utc"],
+            line_number=line_number,
+        )
     return TaxonomyRecord(
         workflow_species_label=label,
         source_species_name=row["source_species_name"],
@@ -487,11 +502,21 @@ def _text_list(*, value: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in value.split(";") if part.strip())
 
 
-def _validate_dates(*, source_date: str, reviewed_at_utc: str, line_number: int) -> None:
-    """Validate review provenance date formats."""
+def _validate_source_date(*, source_date: str, line_number: int) -> None:
+    """Validate one taxonomy-source ISO date."""
 
     try:
         date.fromisoformat(source_date)
+    except ValueError as error:
+        raise InputValidationError(
+            f"Taxonomy TSV line {line_number} contains an invalid provenance date."
+        ) from error
+
+
+def _validate_review_timestamp(*, reviewed_at_utc: str, line_number: int) -> None:
+    """Validate one timezone-aware review timestamp."""
+
+    try:
         parsed_review = datetime.fromisoformat(reviewed_at_utc.replace("Z", "+00:00"))
     except ValueError as error:
         raise InputValidationError(

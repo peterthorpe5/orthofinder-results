@@ -14,7 +14,7 @@ from orthofinder_results.errors import InputValidationError
 from .models import ResourceIdentity
 
 _LOGGER = logging.getLogger("orthofinder_interrogation_app.resource")
-SUPPORTED_SCHEMA_VERSIONS = frozenset({2})
+SUPPORTED_SCHEMA_VERSIONS = frozenset({2, 3})
 REQUIRED_RELATIONS = frozenset(
     {
         "distance_statistics",
@@ -70,6 +70,10 @@ def open_resource(*, path: Path) -> ResourceIdentity:
         raise InputValidationError(
             f"Unsupported resource schema {schema_version}; supported schemas: {supported}."
         )
+    if schema_version >= 3 and "tree_payloads" not in relations:
+        raise InputValidationError(
+            "Schema-3 resource DuckDB lacks required relation: tree_payloads"
+        )
     if len(run_ids) != 1:
         raise InputValidationError(
             "Resource must contain exactly one run_id; observed: "
@@ -110,6 +114,7 @@ def open_resource(*, path: Path) -> ResourceIdentity:
         adapter_name=str(manifest.get("adapter_name", "unknown")),
         primary_group_authority=str(manifest.get("primary_group_authority", "unknown")),
         counts=_integer_counts(record=manifest.get("counts", {})),
+        relations=frozenset(relations),
     )
     _LOGGER.info(
         "Validated read-only resource: run=%s, schema=%s, database=%s",

@@ -94,7 +94,7 @@ def test_missing_manifest_fails(application_resource: Path) -> None:
         ({"run_id": "other"}, "", "identifiers disagree"),
         ({"schema_version": 3}, "", "schema versions disagree"),
         ({"schema_version": "invalid"}, "", "not an integer"),
-        ({}, "UPDATE resource_metadata SET schema_version = 3", "Unsupported resource schema"),
+        ({}, "UPDATE resource_metadata SET schema_version = 4", "Unsupported resource schema"),
         ({}, "DELETE FROM group_statistics", "exactly one run_id"),
         (
             {},
@@ -142,3 +142,21 @@ def test_database_open_and_inspection_failures_are_controlled(tmp_path: Path) ->
     connection.close()
     with pytest.raises(InputValidationError, match="required relations"):
         open_resource(path=empty)
+
+
+def test_schema3_requires_portable_tree_relation(application_resource: Path) -> None:
+    """A schema-3 identity cannot be claimed without its portable-tree relation."""
+
+    manifest_path = application_resource / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["schema_version"] = 3
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    database = application_resource / "duckdb/orthofinder_results.duckdb"
+    connection = duckdb.connect(str(database))
+    try:
+        connection.execute("UPDATE resource_metadata SET schema_version = 3")
+        connection.execute("CHECKPOINT")
+    finally:
+        connection.close()
+    with pytest.raises(InputValidationError, match="tree_payloads"):
+        open_resource(path=application_resource)

@@ -760,6 +760,60 @@ try{{renderStats();renderOverview();renderNetwork();}}catch(error){{showRenderEr
     atomic_write_text(path=output_path, text=document)
 
 
+def build_group_visualisation(
+    *,
+    group_statistic: Mapping[str, Any],
+    memberships: Sequence[Mapping[str, Any]],
+    distances: Sequence[Mapping[str, Any]],
+    distance_statistic: Mapping[str, Any],
+    max_members: int,
+    nearest_neighbours: int,
+    tree_nodes: Sequence[Mapping[str, Any]] = (),
+    tree_edges: Sequence[Mapping[str, Any]] = (),
+    sequence_identifiers: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Build one bounded visual record for an application-selected group.
+
+    Args:
+        group_statistic: Exact group authority record.
+        memberships: Candidate membership rows for the same group.
+        distances: Complete pairwise rows for the displayed member sample.
+        distance_statistic: Summary describing those exact rows.
+        max_members: Maximum members permitted in the visual record.
+        nearest_neighbours: Neighbour edges retained per displayed member.
+        tree_nodes: Optional normalised gene-tree nodes.
+        tree_edges: Optional normalised gene-tree edges.
+        sequence_identifiers: Optional canonical-to-internal aliases.
+
+    Returns:
+        The single JSON-safe visualisation record.
+
+    Raises:
+        ValueError: If bounds are invalid or no matching record is produced.
+    """
+
+    if max_members < 2:
+        raise ValueError("max_members must be at least two.")
+    if nearest_neighbours < 1:
+        raise ValueError("nearest_neighbours must be at least one.")
+    payload = _build_network_payload(
+        group_statistics=(group_statistic,),
+        memberships=memberships,
+        distances=distances,
+        distance_statistics=(distance_statistic,),
+        max_groups=1,
+        max_members=max_members,
+        nearest_neighbours=nearest_neighbours,
+        tree_nodes=tree_nodes,
+        tree_edges=tree_edges,
+        sequence_identifiers=sequence_identifiers,
+    )
+    key = _group_key(group_statistic)
+    if key not in payload:
+        raise ValueError(f"Visualisation builder produced no record for {key}.")
+    return payload[key]
+
+
 def _build_network_payload(
     *,
     group_statistics: Sequence[Mapping[str, Any]],

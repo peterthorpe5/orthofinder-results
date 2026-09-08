@@ -32,6 +32,8 @@ Each successful run creates one immutable output directory containing:
 - per-group and per-group/per-species copy-number statistics;
 - species and sequence identifier mappings when OrthoFinder retained them;
 - a checksum inventory of every discovered input, gene tree and resolved tree;
+- one checksum-bound, compressed portable Newick payload per preferred gene tree,
+  allowing later bounded distance calculations without access to the original run;
 - a normalised species tree, and optionally every gene tree, as node/edge tables;
 - optional aligned-sequence pairwise distances and per-cluster distributions;
 - matching gzip-compressed TSV and typed Parquet tables;
@@ -144,8 +146,8 @@ when the package is used only to build resources on a cluster.
 
 ## Interactive application
 
-Version 0.3.0 provides the read-only standalone application. It opens either
-a completed resource directory or its `duckdb/orthofinder_results.duckdb` file:
+Version 0.4.0 provides the read-only standalone application. It opens either a
+completed resource directory or its `duckdb/orthofinder_results.duckdb` file:
 
 ```bash
 orthofinder-interrogation-app \
@@ -153,48 +155,83 @@ orthofinder-interrogation-app \
 ```
 
 The launcher validates the manifest, schema, run identity and required DuckDB
-relations before starting a local Streamlit server. The database is opened
-read-only for every bounded query. If port 8501 is occupied, the launcher now
-selects the first available port from 8501 upwards; `--server-port` still
-requests one exact port. An optional persistent log can be declared outside the
-immutable resource:
+relations before starting a local Streamlit server. Every database query is
+read-only. If port 8501 is occupied, the launcher selects the first available
+port from 8501 upwards; `--server-port` still requests one exact port. Optional
+persistent cache and log paths remain outside the immutable resource:
 
 ```bash
 orthofinder-interrogation-app \
   --resource-dir /path/to/completed/resource \
-  --log-file /path/to/logs/orthofinder_interrogation_app.log
+  --cache-dir "$HOME/Library/Caches/orthofinder-results" \
+  --log-file "$HOME/orthofinder_results_app_logs/app.log"
 ```
+
+The default cache is `$HOME/Library/Caches/orthofinder-results` on macOS and the
+XDG user cache (or `$HOME/.cache/orthofinder-results`) on Linux. It never assumes
+that a Mac has `/tmp`. Cache files are content-addressed by run, group, tree
+checksum and analysis controls, gzip-compressed, atomically published with
+user-only permissions and reproducible. The app refuses to put its cache inside
+a completed resource.
 
 The application provides:
 
-- complete-authority resource counts and capability identity;
-- bounded group searches by group/member identifier, group type and hierarchy;
+- an actionable overview of complete group authorities and schema capabilities;
+- bounded group/member searches with exact group type and hierarchy;
 - exact stored-species filters with `ANY`, `ALL` and `EXACT_SET` semantics;
 - rejection of every group containing any selected excluded species;
-- member-count, species-count and distance-availability bounds;
-- group compactness columns from mean, median and population-SD distances;
-- explicit distance method and deterministic-sample status;
-- per-species copy counts and complete selected-group memberships within a
-  documented 50,000-row browser materialisation bound; and
-- TSV downloads plus access to the existing self-contained HTML report.
+- member-count, species-count and persisted-distance bounds and sorting;
+- per-species copy counts, member tables and filtered pair-distance TSV exports;
+- a draggable inline force network, with optional layout-only component
+  connectors, plus a separate static nearest-neighbour topology;
+- original 2D, selectable-axis 2D and rotatable 3D PCoA, with separate 2D/3D
+  retained-inertia, stress and distance-correlation diagnostics;
+- a Shepard plot, branch-length phylogram and exact displayed distance matrix;
+- histogram, violin, empirical-CDF, medoid-distance, member-centrality and
+  species-pair heatmap views of within-group dispersion; and
+- a 2–12-group workspace comparing means, population SDs, medians, exact
+  displayed distributions and independent PCoA small multiples.
 
-The evolutionary-views page ports the bounded distance pilot into separate
-PCoA, Shepard, branch-length phylogram, exact distance-matrix and
-nearest-neighbour-topology panels. A member/species selection is linked across
-all panels. Schema-2 resources did not publish the pruned resolved-gene-tree
-geometry as a standalone DuckDB relation, so the application validates and
-uses the matching run-bound payload in the immutable offline report for these
-bounded views. DuckDB remains the complete group-search authority. PCoA and
-force layouts retain their diagnostic/non-quantitative warnings, while every
-panel shows the exact distance method and displayed-sample scope.
+Member and species selections are linked across one cluster's panels. PCoA and
+force layouts retain their diagnostic or non-quantitative warnings; the exact
+matrix, pair table and branch-length phylogram remain quantitative. Every view
+states the exact method, full analytical membership, displayed exact or
+deterministic sample, analysis source and cache state.
+
+Schema-2 resources remain supported: their validated run-bound offline-report
+matrices keep the original pilot groups working. Schema 3 adds a `tree_payloads`
+relation containing one preferred resolved (or fallback original) gene tree for
+portable on-demand analysis. For a selected group without persisted pairs, the
+app resolves its parent OG tree, restricts it to exact HOG membership, calculates
+at most 500 members and 124,750 exact pairs, then stores only the reproducible
+sidecar result. It does not precompute billions of mostly unused pairs and never
+modifies the completed DuckDB.
 
 Exact species labels do not establish taxonomic ancestry. The taxonomic-search
-page therefore accepts a separate reviewed TSV rather than guessing from label
-text. Start by downloading the review template in the page. A reviewed row
-records the workflow/source/accepted names, NCBI taxon and parent IDs/names,
-aligned lineage IDs/names, mapping status/method/source/date/version, reviewer,
-review time and note. `UNMAPPED`, `AMBIGUOUS` and missing labels remain visible
-and never silently become descendants or reviewed outsiders.
+contract is dataset-generic: it reads the exact species authority from the
+selected resource and contains no fixed list of the 60 pilot species. A reviewed
+row records the workflow/source/accepted names, NCBI taxon and parent IDs/names,
+aligned lineage IDs/names, mapping method/source/version, reviewer, review time
+and note. `PENDING_REVIEW`, `UNMAPPED`, `AMBIGUOUS` and missing labels remain
+visible and never silently become descendants or reviewed outsiders.
+
+The page provides an empty review template. A local extracted NCBI `taxdump` can
+also generate exact-name candidates for every species in any resource:
+
+```bash
+orthofinder-taxonomy-map \
+  --resource-dir /path/to/completed/resource \
+  --taxdump-dir /path/to/extracted_ncbi_taxdump \
+  --source-date 2026-09-07 \
+  --source-version taxdump-20260907-sha256-REPLACE_ME \
+  --output-tsv /persistent/path/taxonomy_candidates.tsv
+```
+
+Unique exact scientific-name or synonym matches are deliberately marked
+`PENDING_REVIEW`, never `REVIEWED`; multiple matches remain `AMBIGUOUS` and
+missing matches remain `UNMAPPED`. Confirm each taxon and lineage, then change
+only accepted decisions to `REVIEWED` and complete `reviewed_by`,
+`reviewed_at_utc` and `review_note` before descendant searches.
 
 The mapping can be uploaded for one browser session or supplied as a sidecar:
 
@@ -206,11 +243,12 @@ orthofinder-interrogation-app \
 ```
 
 [`examples/results_feb26_ncbi_taxonomy_mapping_20260907.tsv`](examples/results_feb26_ncbi_taxonomy_mapping_20260907.tsv)
-is a 60-label sidecar for the `Results_Feb26` resource. It was resolved against
-the official NCBI `taxdump.tar.gz` snapshot published on 7 September 2026. It
-contains 59 reviewed unique exact-name matches and deliberately retains
-`Leismania_major` as `UNMAPPED`; confirm and document that apparent workflow
-misspelling against the original FASTA provenance before changing its status.
+is a 60-label example for the `Results_Feb26` resource, not an application
+species list. It was resolved against the official NCBI `taxdump.tar.gz`
+snapshot published on 7 September 2026. It contains 59 reviewed unique
+exact-name matches and deliberately retains `Leismania_major` as `UNMAPPED`;
+confirm and document that apparent workflow misspelling against the original
+FASTA provenance before changing its status.
 
 Taxon-ID/descendant searches use only `REVIEWED` rows and provide four explicit
 semantics:
@@ -250,7 +288,7 @@ All CLI controls are named. No source file beneath `--results-dir` is modified.
 orthofinder-results \
   --action run \
   --results-dir /path/to/OrthoFinder/Results_Feb26 \
-  --output-dir /persistent/project/orthofinder_results/results_feb26_v0_1_5 \
+  --output-dir /persistent/project/orthofinder_results/results_feb26_v0_4_0 \
   --run-id results_feb26 \
   --work-dir /persistent/project/orthofinder_results/work \
   --report-max-groups 25 \
@@ -302,6 +340,13 @@ aliases. The recorded `member_identifier_resolution` reports which mapping was
 used. Missing, duplicate and ambiguous mappings fail that cluster explicitly;
 the package never strips prefixes heuristically.
 
+Regardless of the precomputed distance-group bound, schema 3 publishes the
+checksum-verified preferred gene trees as compressed portable payloads. Keeping
+`--distance-max-groups 25` therefore preserves a fast opening pilot while the
+app can calculate other selected groups lazily. Do not set the bound to zero
+merely to support the app: on a large run that would attempt every eligible pair
+matrix and can be computationally and spatially prohibitive.
+
 Use `--parse-gene-trees` only when normalised nodes and edges for every gene
 tree are required. Tree files are checksum-inventoried even when their nodes
 are not expanded, so a resumed run cannot miss a changed tree.
@@ -333,7 +378,7 @@ this cleanup policy.
 
 ## Regenerate only the standalone HTML
 
-Version 0.1.5 can build a new compact report from an existing completed resource.
+The report action can build a new compact report from an existing completed resource.
 It does not mutate that resource or repeat OrthoFinder parsing, distance
 calculation, Parquet conversion or DuckDB construction. The HTML and log must be
 outside the immutable resource directory:
@@ -372,7 +417,7 @@ files, which is suitable for `mosh` sessions:
   -- \
   --action run \
   --results-dir /path/to/OrthoFinder/Results_Feb26 \
-  --output-dir /persistent/project/orthofinder_results/results_feb26_v0_1_5 \
+  --output-dir /persistent/project/orthofinder_results/results_feb26_v0_4_0 \
   --run-id results_feb26
 ```
 
@@ -427,14 +472,14 @@ Open the database with:
 duckdb /path/to/output/duckdb/orthofinder_results.duckdb
 ```
 
-## Scope of version 0.3.0
+## Scope of version 0.4.0
 
-Version 0.3.0 adds the read-only visual and reviewed-taxonomy application layers
-to the loss-aware, version-aware ingestion and report-only regeneration foundation.
-Cross-run cluster lineage
-(stable overlap scores, split/merge classification and taxon-aware
-comparisons) belongs in a later, separately tested comparison layer. Keeping
-source runs immutable is what makes that layer possible and auditable.
+Version 0.4.0 adds the portable-tree/lazy-distance backend, generic taxdump
+candidate workflow, multi-view dispersion explorer and within-run comparison
+workspace to the loss-aware ingestion foundation. It compares several clusters
+from one immutable run; cross-run cluster lineage (stable overlap scores and
+split/merge classification) remains a later, separately tested layer. Keeping
+source runs immutable is what makes that future layer possible and auditable.
 
 ## Development quality gate
 

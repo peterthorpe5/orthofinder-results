@@ -62,6 +62,8 @@ from .trees import (
     TREE_EDGE_FIELDS,
     TREE_INVENTORY_FIELDS,
     TREE_NODE_FIELDS,
+    TREE_PAYLOAD_FIELDS,
+    iter_portable_tree_payloads,
     iter_tree_inventory,
     normalise_newick_tree,
     tree_id_from_path,
@@ -99,6 +101,7 @@ GROUP_TYPES = {
     "legacy_orthogroup_memberships": {"source_row": "int64"},
     "hog_memberships": {"source_row": "int64"},
     "tree_inventory": {"size_bytes": "int64"},
+    "tree_payloads": {"source_size_bytes": "int64"},
     "tree_nodes": {
         "is_leaf": "bool",
         "branch_length": "float64",
@@ -820,14 +823,20 @@ def _build_resource(
         )
         stage["details"] = f"species={species_count};sequences={sequence_count}"
     with stages.record(stage="tree_inventory_and_normalisation") as stage:
-        tree_inventory, tree_node_count, tree_edge_count = _publish_trees(
+        (
+            tree_inventory,
+            tree_payload_count,
+            tree_node_count,
+            tree_edge_count,
+        ) = _publish_trees(
             tables_dir=tables,
             layout=layout,
             run_id=run_id,
             parse_gene_trees=parse_gene_trees,
         )
         stage["details"] = (
-            f"tree_files={len(tree_inventory)};nodes={tree_node_count};edges={tree_edge_count}"
+            f"tree_files={len(tree_inventory)};portable_trees={tree_payload_count};"
+            f"nodes={tree_node_count};edges={tree_edge_count}"
         )
     with stages.record(stage="pairwise_distances") as stage:
         distance_count, distance_summaries = _publish_distances(
@@ -899,6 +908,7 @@ def _build_resource(
             "group_count": group_count,
             "species_count": species_count,
             "tree_inventory_count": len(tree_inventory),
+            "tree_payload_count": tree_payload_count,
             "tree_node_count": tree_node_count,
             "distance_group_count": len(distance_summaries),
             "distance_pair_count": distance_count,
@@ -939,6 +949,7 @@ def _build_resource(
         species_count=species_count,
         sequence_count=sequence_count,
         tree_inventory_count=len(tree_inventory),
+        tree_payload_count=tree_payload_count,
         tree_node_count=tree_node_count,
         distance_count=distance_count,
         offline_report=offline_report,
@@ -975,6 +986,7 @@ def _build_resource(
             "species_count": species_count,
             "sequence_count": sequence_count,
             "tree_file_count": len(tree_inventory),
+            "tree_payload_count": tree_payload_count,
             "tree_node_count": tree_node_count,
             "tree_edge_count": tree_edge_count,
             "distance_pair_count": distance_count,
@@ -1233,7 +1245,7 @@ def _publish_identifiers(
 
 def _publish_trees(
     *, tables_dir: Path, layout: ResultLayout, run_id: str, parse_gene_trees: bool
-) -> tuple[list[dict[str, Any]], int, int]:
+) -> tuple[list[dict[str, Any]], int, int, int]:
     """Publish tree file provenance and optional normalised nodes and edges."""
 
     _LOGGER.info("Tree checksum inventory started.")
@@ -1249,6 +1261,16 @@ def _publish_trees(
         fieldnames=TREE_INVENTORY_FIELDS,
         records=inventory,
     )
+    payload_count = write_tsv(
+        path=_table_path(tables_dir=tables_dir, relation="tree_payloads"),
+        fieldnames=TREE_PAYLOAD_FIELDS,
+        records=iter_portable_tree_payloads(
+            layout=layout,
+            run_id=run_id,
+            inventory=inventory,
+        ),
+    )
+    _LOGGER.info("Portable tree publication finished: trees=%s", f"{payload_count:,}")
     node_count = 0
     edge_count = 0
     with (
@@ -1283,7 +1305,7 @@ def _publish_trees(
             edge_writer.writerows(edges)
             node_count += len(nodes)
             edge_count += len(edges)
-    return inventory, node_count, edge_count
+    return inventory, payload_count, node_count, edge_count
 
 
 def _publish_distances(
@@ -2405,6 +2427,7 @@ def _qc_rows(
     species_count: int,
     sequence_count: int,
     tree_inventory_count: int,
+    tree_payload_count: int,
     tree_node_count: int,
     distance_count: int,
     offline_report: bool,
@@ -2461,6 +2484,17 @@ def _qc_rows(
             tree_node_count,
             ">0 when a species tree is available",
             "Species tree nodes are always normalised; gene trees are optional.",
+        ),
+        _qc(
+            "portable_gene_tree_status",
+            tree_payload_count > 0
+            or not (
+                layout.capabilities.has_resolved_gene_trees
+                or layout.capabilities.has_gene_trees
+            ),
+            tree_payload_count,
+            ">0 when gene trees are available",
+            "Preferred gene-tree Newick is embedded for portable lazy distances.",
         ),
         _qc(
             "distance_status",

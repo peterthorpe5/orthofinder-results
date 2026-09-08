@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
@@ -10,11 +11,639 @@ from typing import Any
 import networkx as nx
 import numpy as np
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 from orthofinder_results.errors import InputValidationError
 
+from .dispersion import PcoaGeometry, distance_class_rows, species_dispersion_rows
+
 _DEFAULT_COLOUR = "#5b6475"
 _HIGHLIGHT_BORDER = "#111827"
+
+
+def pcoa_3d_figure(
+    *, geometry: PcoaGeometry, selected_members: Iterable[str] = ()
+) -> go.Figure:
+    """Build an interactive three-axis PCoA diagnostic.
+
+    Args:
+        geometry: Exact-matrix PCoA coordinates and diagnostics.
+        selected_members: Linked canonical members to emphasise.
+
+    Returns:
+        Species-coloured rotatable three-dimensional Plotly figure.
+    """
+
+    selected = {str(value) for value in selected_members}
+    by_species: dict[str, list[int]] = defaultdict(list)
+    for index, species in enumerate(geometry.species_labels):
+        by_species[species].append(index)
+    figure = go.Figure()
+    for species in sorted(by_species):
+        indices = by_species[species]
+        ids = [geometry.member_ids[index] for index in indices]
+        chosen = [not selected or member_id in selected for member_id in ids]
+        figure.add_trace(
+            go.Scatter3d(
+                x=[geometry.coordinates[index][0] for index in indices],
+                y=[geometry.coordinates[index][1] for index in indices],
+                z=[geometry.coordinates[index][2] for index in indices],
+                mode="markers",
+                name=species,
+                customdata=[[member_id, species] for member_id in ids],
+                marker={
+                    "color": _stable_species_colour(species=species),
+                    "size": [8 if active else 4 for active in chosen],
+                    "opacity": 0.9 if not selected else 0.75,
+                    "line": {
+                        "color": [
+                            _HIGHLIGHT_BORDER if active and selected else "#ffffff"
+                            for active in chosen
+                        ],
+                        "width": 2 if selected else 0.3,
+                    },
+                },
+                hovertemplate=(
+                    "Member=%{customdata[0]}<br>Species=%{customdata[1]}<br>"
+                    "Axis 1=%{x:.6g}<br>Axis 2=%{y:.6g}<br>Axis 3=%{z:.6g}"
+                    "<extra></extra>"
+                ),
+            )
+        )
+    fractions = geometry.axis_fractions
+    figure.update_layout(
+        title="Three-axis complete-distance PCoA diagnostic",
+        scene={
+            "xaxis_title": f"Axis 1 ({100 * fractions[0]:.1f}%)",
+            "yaxis_title": f"Axis 2 ({100 * fractions[1]:.1f}%)",
+            "zaxis_title": f"Axis 3 ({100 * fractions[2]:.1f}%)",
+            "aspectmode": "data",
+        },
+        height=760,
+        template="plotly_white",
+        legend_title="Species",
+    )
+    return figure
+
+
+def pcoa_axis_figure(
+    *,
+    geometry: PcoaGeometry,
+    horizontal_axis: int,
+    vertical_axis: int,
+    selected_members: Iterable[str] = (),
+) -> go.Figure:
+    """Build a selectable two-axis view of the three-axis PCoA solution.
+
+    Args:
+        geometry: Exact-matrix PCoA coordinates and diagnostics.
+        horizontal_axis: One-based horizontal axis in the range one to three.
+        vertical_axis: One-based vertical axis in the range one to three.
+        selected_members: Linked canonical members to emphasise.
+
+    Returns:
+        Interactive two-dimensional diagnostic scatter.
+
+    Raises:
+        InputValidationError: If axes are invalid or identical.
+    """
+
+    if horizontal_axis not in {1, 2, 3} or vertical_axis not in {1, 2, 3}:
+        raise InputValidationError("PCoA axes must be between one and three.")
+    if horizontal_axis == vertical_axis:
+        raise InputValidationError("Horizontal and vertical PCoA axes must differ.")
+    selected = {str(value) for value in selected_members}
+    by_species: dict[str, list[int]] = defaultdict(list)
+    for index, species in enumerate(geometry.species_labels):
+        by_species[species].append(index)
+    figure = go.Figure()
+    x_index, y_index = horizontal_axis - 1, vertical_axis - 1
+    for species in sorted(by_species):
+        indices = by_species[species]
+        ids = [geometry.member_ids[index] for index in indices]
+        active = [not selected or member_id in selected for member_id in ids]
+        figure.add_trace(
+            go.Scattergl(
+                x=[geometry.coordinates[index][x_index] for index in indices],
+                y=[geometry.coordinates[index][y_index] for index in indices],
+                mode="markers",
+                name=species,
+                customdata=[[member_id, species] for member_id in ids],
+                marker={
+                    "color": _stable_species_colour(species=species),
+                    "size": [13 if chosen and selected else 8 for chosen in active],
+                    "opacity": [1.0 if chosen else 0.12 for chosen in active],
+                    "line": {
+                        "color": [
+                            _HIGHLIGHT_BORDER if chosen and selected else "#ffffff"
+                            for chosen in active
+                        ],
+                        "width": [2 if chosen and selected else 0.5 for chosen in active],
+                    },
+                },
+                hovertemplate=(
+                    "Member=%{customdata[0]}<br>Species=%{customdata[1]}<br>"
+                    f"Axis {horizontal_axis}=%{{x:.6g}}<br>"
+                    f"Axis {vertical_axis}=%{{y:.6g}}<extra></extra>"
+                ),
+            )
+        )
+    fractions = geometry.axis_fractions
+    figure.update_layout(
+        title=f"Complete-distance PCoA: axes {horizontal_axis} and {vertical_axis}",
+        xaxis_title=(
+            f"PCoA axis {horizontal_axis} ({100 * fractions[x_index]:.1f}% positive inertia)"
+        ),
+        yaxis_title=(
+            f"PCoA axis {vertical_axis} ({100 * fractions[y_index]:.1f}% positive inertia)"
+        ),
+        height=680,
+        template="plotly_white",
+        dragmode="lasso",
+        legend_title="Species",
+    )
+    figure.update_yaxes(scaleanchor="x", scaleratio=1)
+    return figure
+
+
+def distance_distribution_figure(*, rows: Sequence[Mapping[str, Any]]) -> go.Figure:
+    """Build histogram, violin and ECDF views of exact pair distances.
+
+    Args:
+        rows: Species-decorated pairwise distance records.
+
+    Returns:
+        Three-panel distribution figure separating within- and between-species pairs.
+    """
+
+    classified = distance_class_rows(rows=rows)
+    figure = make_subplots(
+        rows=1,
+        cols=3,
+        subplot_titles=("Histogram", "Violin + box", "Empirical CDF"),
+    )
+    colours = {"Within species": "#2c7fb8", "Between species": "#d95f0e"}
+    for pair_class in ("Within species", "Between species"):
+        values = [
+            float(row["distance"])
+            for row in classified
+            if row["pair_class"] == pair_class
+        ]
+        if not values:
+            continue
+        colour = colours[pair_class]
+        figure.add_trace(
+            go.Histogram(
+                x=values,
+                name=pair_class,
+                marker_color=colour,
+                opacity=0.60,
+                histnorm="probability",
+                legendgroup=pair_class,
+            ),
+            row=1,
+            col=1,
+        )
+        figure.add_trace(
+            go.Violin(
+                x=[pair_class] * len(values),
+                y=values,
+                name=pair_class,
+                box_visible=True,
+                meanline_visible=True,
+                line_color=colour,
+                fillcolor=colour,
+                opacity=0.60,
+                legendgroup=pair_class,
+                showlegend=False,
+            ),
+            row=1,
+            col=2,
+        )
+        ordered = sorted(values)
+        figure.add_trace(
+            go.Scattergl(
+                x=ordered,
+                y=[(index + 1) / len(ordered) for index in range(len(ordered))],
+                mode="lines",
+                name=pair_class,
+                line={"color": colour, "width": 2.5},
+                legendgroup=pair_class,
+                showlegend=False,
+            ),
+            row=1,
+            col=3,
+        )
+    figure.update_xaxes(title_text="Exact pairwise distance", row=1, col=1)
+    figure.update_yaxes(title_text="Fraction of pairs", row=1, col=1)
+    figure.update_yaxes(title_text="Exact pairwise distance", row=1, col=2)
+    figure.update_xaxes(title_text="Exact pairwise distance", row=1, col=3)
+    figure.update_yaxes(title_text="Cumulative fraction", range=[0, 1], row=1, col=3)
+    figure.update_layout(
+        title="Within-group distance dispersion",
+        barmode="overlay",
+        height=560,
+        template="plotly_white",
+        legend_title="Endpoint class",
+    )
+    return figure
+
+
+def member_dispersion_figure(
+    *, rows: Sequence[Mapping[str, Any]], selected_members: Iterable[str] = ()
+) -> go.Figure:
+    """Plot each member's mean distance and variability to all peers.
+
+    Args:
+        rows: Per-member dispersion summary rows.
+        selected_members: Linked members to emphasise.
+
+    Returns:
+        Ranked mean-distance scatter with population-SD error bars.
+    """
+
+    selected = {str(value) for value in selected_members}
+    ordered = sorted(
+        rows,
+        key=lambda row: (float(row["mean_distance"]), str(row["member_id"])),
+    )
+    figure = go.Figure()
+    for species in sorted({str(row["species_label"]) for row in ordered}):
+        indices = [
+            index for index, row in enumerate(ordered) if str(row["species_label"]) == species
+        ]
+        species_rows = [ordered[index] for index in indices]
+        figure.add_trace(
+            go.Scattergl(
+                x=[index + 1 for index in indices],
+                y=[float(row["mean_distance"]) for row in species_rows],
+                mode="markers",
+                name=species,
+                customdata=[
+                    [
+                        row["member_id"],
+                        row["nearest_member_id"],
+                        row["nearest_distance"],
+                        row["maximum_distance"],
+                    ]
+                    for row in species_rows
+                ],
+                error_y={
+                    "type": "data",
+                    "array": [
+                        float(row["population_stddev_distance"]) for row in species_rows
+                    ],
+                    "visible": True,
+                    "thickness": 0.8,
+                },
+                marker={
+                    "color": _stable_species_colour(species=species),
+                    "size": [
+                        15
+                        if bool(row.get("is_sample_medoid"))
+                        or str(row["member_id"]) in selected
+                        else 8
+                        for row in species_rows
+                    ],
+                    "symbol": [
+                        "star" if bool(row.get("is_sample_medoid")) else "circle"
+                        for row in species_rows
+                    ],
+                    "line": {"color": "#ffffff", "width": 0.5},
+                },
+                hovertemplate=(
+                    "Member=%{customdata[0]}<br>Mean distance=%{y:.6g}<br>"
+                    "Nearest=%{customdata[1]} (%{customdata[2]:.6g})<br>"
+                    "Maximum=%{customdata[3]:.6g}<extra></extra>"
+                ),
+            )
+        )
+    figure.update_layout(
+        title="Member centrality and peripherality",
+        xaxis_title="Member rank from compact centre to periphery",
+        yaxis_title="Mean distance to every other displayed member (± population SD)",
+        height=600,
+        template="plotly_white",
+        legend_title="Species",
+    )
+    return figure
+
+
+def medoid_distance_figure(
+    *,
+    rows: Sequence[Mapping[str, Any]],
+    member_rows: Sequence[Mapping[str, Any]],
+) -> go.Figure:
+    """Plot every displayed member's exact distance from the sample medoid.
+
+    Args:
+        rows: Species-decorated exact pairwise distances.
+        member_rows: Per-member summaries containing the sample-medoid flag.
+
+    Returns:
+        Sorted sample-medoid distance profile.
+    """
+
+    medoids = [str(row["member_id"]) for row in member_rows if row.get("is_sample_medoid")]
+    if len(medoids) != 1:
+        raise InputValidationError("Exactly one sample medoid is required.")
+    medoid = medoids[0]
+    species_by_member = {
+        str(row["member_id"]): str(row["species_label"]) for row in member_rows
+    }
+    values = [(medoid, 0.0)]
+    for row in rows:
+        left, right = str(row["member_a"]), str(row["member_b"])
+        if left == medoid:
+            values.append((right, float(row["distance"])))
+        elif right == medoid:
+            values.append((left, float(row["distance"])))
+    values.sort(key=lambda item: (item[1], item[0]))
+    figure = go.Figure(
+        go.Bar(
+            x=[member for member, _ in values],
+            y=[distance for _, distance in values],
+            marker_color=[
+                _stable_species_colour(species=species_by_member[member])
+                for member, _ in values
+            ],
+            customdata=[[species_by_member[member]] for member, _ in values],
+            hovertemplate=(
+                "Member=%{x}<br>Species=%{customdata[0]}<br>"
+                "Distance from sample medoid=%{y:.6g}<extra></extra>"
+            ),
+        )
+    )
+    figure.update_layout(
+        title=f"Exact distance from sample medoid {medoid}",
+        xaxis_title="Displayed members, sorted by medoid distance",
+        yaxis_title="Exact pairwise distance",
+        height=560,
+        template="plotly_white",
+    )
+    figure.update_xaxes(showticklabels=len(values) <= 80)
+    return figure
+
+
+def species_pair_heatmap_figure(*, rows: Sequence[Mapping[str, Any]]) -> go.Figure:
+    """Build a mean-distance heatmap across represented species pairs.
+
+    Args:
+        rows: Species-decorated pairwise distance records.
+
+    Returns:
+        Symmetric species-pair mean-distance heatmap with missing cells explicit.
+    """
+
+    summaries = species_dispersion_rows(rows=rows)
+    species = sorted(
+        {str(row[field]) for row in summaries for field in ("species_a", "species_b")}
+    )
+    index = {label: position for position, label in enumerate(species)}
+    matrix = np.full((len(species), len(species)), np.nan, dtype=float)
+    counts = np.zeros((len(species), len(species)), dtype=int)
+    for row in summaries:
+        left, right = index[str(row["species_a"])], index[str(row["species_b"])]
+        matrix[left, right] = matrix[right, left] = float(row["mean_distance"])
+        counts[left, right] = counts[right, left] = int(row["pair_count"])
+    figure = go.Figure(
+        go.Heatmap(
+            z=matrix,
+            x=species,
+            y=species,
+            customdata=counts,
+            colorscale="Viridis",
+            colorbar={"title": "Mean distance"},
+            hovertemplate=(
+                "Species A=%{y}<br>Species B=%{x}<br>Mean distance=%{z:.6g}<br>"
+                "Pairs=%{customdata:,}<extra></extra>"
+            ),
+            hoverongaps=False,
+        )
+    )
+    figure.update_layout(
+        title="Mean pairwise distance by represented species pair",
+        xaxis_title="Species",
+        yaxis_title="Species",
+        height=max(620, min(1_300, 240 + 14 * len(species))),
+        template="plotly_white",
+    )
+    figure.update_yaxes(autorange="reversed")
+    return figure
+
+
+def comparison_summary_figure(*, summaries: Sequence[Mapping[str, Any]]) -> go.Figure:
+    """Compare group mean distance, SD and median on a shared scale.
+
+    Args:
+        summaries: Labelled distance-summary records.
+
+    Returns:
+        Horizontal mean-distance plot with population-SD error bars and medians.
+    """
+
+    ordered = sorted(
+        summaries,
+        key=lambda row: (float(row["mean_distance"]), str(row["label"])),
+    )
+    figure = go.Figure()
+    figure.add_trace(
+        go.Scatter(
+            x=[float(row["mean_distance"]) for row in ordered],
+            y=[str(row["label"]) for row in ordered],
+            mode="markers",
+            name="Mean ± population SD",
+            error_x={
+                "type": "data",
+                "array": [float(row["population_stddev_distance"]) for row in ordered],
+                "visible": True,
+            },
+            marker={"size": 11, "color": "#2c7fb8"},
+        )
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=[float(row["median_distance"]) for row in ordered],
+            y=[str(row["label"]) for row in ordered],
+            mode="markers",
+            name="Median",
+            marker={"size": 10, "symbol": "diamond", "color": "#d95f0e"},
+        )
+    )
+    figure.update_layout(
+        title="Between-group compactness comparison",
+        xaxis_title="Exact displayed pairwise distance",
+        yaxis_title="Group",
+        height=max(500, 140 + 55 * len(ordered)),
+        template="plotly_white",
+    )
+    return figure
+
+
+def comparison_distribution_figure(
+    *, distance_groups: Mapping[str, Sequence[float]], mode: str
+) -> go.Figure:
+    """Compare exact group distance distributions as violins or ECDFs.
+
+    Args:
+        distance_groups: Group label to complete displayed distance vector.
+        mode: ``VIOLIN`` or ``ECDF``.
+
+    Returns:
+        Shared-axis comparison figure.
+
+    Raises:
+        InputValidationError: If the requested display mode is unsupported.
+    """
+
+    if mode not in {"VIOLIN", "ECDF"}:
+        raise InputValidationError(f"Unsupported comparison distribution mode: {mode}")
+    figure = go.Figure()
+    for index, (label, raw_values) in enumerate(sorted(distance_groups.items())):
+        values = sorted(float(value) for value in raw_values)
+        colour = _series_colour(index=index)
+        if mode == "VIOLIN":
+            figure.add_trace(
+                go.Violin(
+                    x=[label] * len(values),
+                    y=values,
+                    name=label,
+                    box_visible=True,
+                    meanline_visible=True,
+                    line_color=colour,
+                    fillcolor=colour,
+                    opacity=0.65,
+                    showlegend=False,
+                )
+            )
+        else:
+            figure.add_trace(
+                go.Scattergl(
+                    x=values,
+                    y=[(position + 1) / len(values) for position in range(len(values))],
+                    mode="lines",
+                    name=label,
+                    line={"color": colour, "width": 2.2},
+                )
+            )
+    if mode == "VIOLIN":
+        x_title, y_title = "Group", "Exact displayed pairwise distance"
+        title = "Exact distance distributions across groups"
+    else:
+        x_title, y_title = "Exact displayed pairwise distance", "Cumulative fraction"
+        title = "Empirical distance distributions across groups"
+    figure.update_layout(
+        title=title,
+        xaxis_title=x_title,
+        yaxis_title=y_title,
+        height=620,
+        template="plotly_white",
+        legend_title="Group",
+    )
+    return figure
+
+
+def comparison_pcoa_figure(*, geometries: Mapping[str, PcoaGeometry]) -> go.Figure:
+    """Build consistent-colour small-multiple PCoA panels for several groups.
+
+    Each group is projected independently. Coordinates and orientation must not be
+    compared between panels; the panels compare within-group dispersion patterns.
+
+    Args:
+        geometries: Two to twelve labelled group geometries.
+
+    Returns:
+        Small-multiple axes-one-and-two PCoA figure.
+
+    Raises:
+        InputValidationError: If the comparison size is outside two to twelve groups.
+    """
+
+    if not 2 <= len(geometries) <= 12:
+        raise InputValidationError("PCoA comparison requires between 2 and 12 groups.")
+    labels = sorted(geometries)
+    columns = min(3, len(labels))
+    rows = math.ceil(len(labels) / columns)
+    figure = make_subplots(rows=rows, cols=columns, subplot_titles=labels)
+    for panel, label in enumerate(labels):
+        geometry = geometries[label]
+        row, column = panel // columns + 1, panel % columns + 1
+        figure.add_trace(
+            go.Scattergl(
+                x=[coordinate[0] for coordinate in geometry.coordinates],
+                y=[coordinate[1] for coordinate in geometry.coordinates],
+                mode="markers",
+                name=label,
+                customdata=[
+                    [member, species]
+                    for member, species in zip(
+                        geometry.member_ids,
+                        geometry.species_labels,
+                        strict=True,
+                    )
+                ],
+                marker={
+                    "color": [
+                        _stable_species_colour(species=species)
+                        for species in geometry.species_labels
+                    ],
+                    "size": 6,
+                    "opacity": 0.80,
+                    "line": {"color": "#ffffff", "width": 0.3},
+                },
+                showlegend=False,
+                hovertemplate=(
+                    "Member=%{customdata[0]}<br>Species=%{customdata[1]}<br>"
+                    "Axis 1=%{x:.6g}<br>Axis 2=%{y:.6g}<extra></extra>"
+                ),
+            ),
+            row=row,
+            col=column,
+        )
+        figure.update_xaxes(title_text="Axis 1", row=row, col=column)
+        figure.update_yaxes(
+            title_text="Axis 2",
+            scaleanchor=f"x{panel + 1}" if panel else "x",
+            scaleratio=1,
+            row=row,
+            col=column,
+        )
+    figure.update_layout(
+        title="Independent within-group PCoA small multiples",
+        height=max(620, 480 * rows),
+        template="plotly_white",
+    )
+    return figure
+
+
+def _stable_species_colour(*, species: str) -> str:
+    """Return a deterministic HSL colour derived from an exact species label."""
+
+    digest = hashlib.sha256(species.encode("utf-8")).digest()
+    hue = int.from_bytes(digest[:4], "big") / (2**32) * 360
+    saturation = 58 + digest[4] % 19
+    lightness = 42 + digest[5] % 17
+    return f"hsl({hue:.1f},{saturation}%,{lightness}%)"
+
+
+def _series_colour(*, index: int) -> str:
+    """Return a high-contrast deterministic colour for a comparison series."""
+
+    palette = (
+        "#2c7fb8",
+        "#d95f0e",
+        "#31a354",
+        "#756bb1",
+        "#e7298a",
+        "#636363",
+        "#1b9e77",
+        "#e6ab02",
+        "#a6761d",
+        "#66a61e",
+        "#7570b3",
+        "#e41a1c",
+    )
+    return palette[index % len(palette)]
 
 
 def linked_member_ids(

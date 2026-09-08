@@ -10,6 +10,11 @@ import streamlit as st
 
 from orthofinder_results.errors import InputValidationError
 
+from .evolutionary_page import (
+    _comparison_keys,
+    _store_active_group,
+    _store_comparison_keys,
+)
 from .models import GroupKey, TaxonomySearchFilters
 from .queries import OrthoFinderQueryService
 from .taxonomy import (
@@ -36,7 +41,8 @@ def render_taxonomy_search(*, service: OrthoFinderQueryService, taxonomy_path_te
     st.header("Taxonomic search")
     st.caption(
         "Descendant logic uses only an explicit reviewed TSV mapping. Workflow labels are "
-        "never interpreted as taxonomy from their spelling."
+        "never interpreted as taxonomy from their spelling. The workflow is generated from "
+        "the current resource species set, so it is not tied to this study's 60 species."
     )
     species = service.list_species()
     st.download_button(
@@ -63,7 +69,9 @@ def render_taxonomy_search(*, service: OrthoFinderQueryService, taxonomy_path_te
     if authority is None:
         st.info(
             "Load a reviewed mapping above or launch with --taxonomy-map. The template "
-            "contains every exact species label and deliberately starts as UNMAPPED."
+            "contains every exact species label and deliberately starts as UNMAPPED. The "
+            "orthofinder-taxonomy-map command can add exact NCBI taxdump candidates, but "
+            "they remain PENDING_REVIEW until a person approves them."
         )
         return
     _render_mapping_audit(authority=authority)
@@ -182,7 +190,7 @@ def render_taxonomy_search(*, service: OrthoFinderQueryService, taxonomy_path_te
         st.warning("No groups match the selected taxonomic criteria.")
         return
     displayed = tuple(_display_taxonomy_row(row=row) for row in result.rows)
-    st.dataframe(displayed, use_container_width=True, hide_index=True)
+    st.dataframe(displayed, width="stretch", hide_index=True)
     st.download_button(
         "Download this taxonomic result page as TSV",
         data=records_to_tsv(records=result.rows),
@@ -205,8 +213,20 @@ def render_taxonomy_search(*, service: OrthoFinderQueryService, taxonomy_path_te
     }
     selected_label = st.selectbox("Inspect one taxonomic match", tuple(labels_to_keys))
     key = labels_to_keys[selected_label]
+    actions = st.columns(2)
+    if actions[0].button("Open taxonomic match in Cluster explorer", type="primary"):
+        _store_active_group(key=key)
+        st.session_state["app_page"] = "Cluster explorer"
+        st.rerun()
+    basket = _comparison_keys()
+    if actions[1].button(
+        "Add taxonomic match to comparison",
+        disabled=key in basket or len(basket) >= 12,
+    ):
+        _store_comparison_keys(keys=(*basket, key))
+        st.success(f"Added to comparison workspace ({len(basket) + 1:,}/12).")
     st.subheader(key.display_label())
-    st.dataframe(service.get_group_species(key=key), use_container_width=True, hide_index=True)
+    st.dataframe(service.get_group_species(key=key), width="stretch", hide_index=True)
 
 
 def _mapping_authority(
@@ -230,20 +250,28 @@ def _render_mapping_audit(*, authority: TaxonomyAuthority) -> None:
     """Render mapping status without hiding ambiguous or missing labels."""
 
     counts = authority.summary()
-    columns = st.columns(4)
+    columns = st.columns(5)
     for column, status in zip(
-        columns, ("REVIEWED", "UNMAPPED", "AMBIGUOUS", "MISSING"), strict=True
+        columns,
+        ("REVIEWED", "PENDING_REVIEW", "UNMAPPED", "AMBIGUOUS", "MISSING"),
+        strict=True,
     ):
-        column.metric(status.title(), f"{counts[status]:,}")
+        column.metric(status.replace("_", " ").title(), f"{counts[status]:,}")
     audit = taxonomy_audit_rows(authority=authority)
-    with st.expander("Taxonomy mapping audit", expanded=bool(authority.unresolved_species)):
-        if authority.unresolved_species:
-            st.warning(
-                f"{len(authority.unresolved_species):,} sampled labels are unresolved. "
-                "They never count as reviewed outsiders or descendants and remain visible "
-                "in every matching group."
-            )
-        st.dataframe(audit, use_container_width=True, hide_index=True)
+    unresolved = tuple(row for row in audit if row["mapping_status"] != "REVIEWED")
+    if unresolved:
+        st.warning(
+            f"{len(unresolved):,} sampled labels are unresolved or pending review. They "
+            "never count as reviewed outsiders or descendants and remain visible in every "
+            "matching group."
+        )
+        with st.expander(
+            f"Unresolved and pending mapping rows ({len(unresolved):,})",
+            expanded=True,
+        ):
+            st.dataframe(unresolved, width="stretch", hide_index=True)
+    with st.expander(f"Complete taxonomy mapping audit ({len(audit):,})", expanded=False):
+        st.dataframe(audit, width="stretch", hide_index=True)
         st.download_button(
             "Download mapping audit as TSV",
             data=records_to_tsv(records=audit),
@@ -298,6 +326,10 @@ def _display_taxonomy_row(*, row: dict[str, Any]) -> dict[str, Any]:
         "Reviewed outsiders": row["outside_species_count"],
         "Outsider species": row["outsider_species_labels"],
         "Unresolved species": row["unresolved_species_labels"],
+        "Persisted distance status": row.get("computation_status") or "Not calculated",
+        "Persisted mean distance": row.get("mean_distance"),
+        "Persisted median distance": row.get("median_distance"),
+        "Persisted distance SD": row.get("population_stddev_distance"),
     }
     if "enrichment_q_value" in row:
         displayed.update(

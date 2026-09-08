@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Sequence
 from typing import Any
 
@@ -23,6 +24,7 @@ from .taxonomy import TaxonomyAuthority, add_fisher_enrichment
 
 _LOGGER = logging.getLogger("orthofinder_interrogation_app.queries")
 MAX_GROUP_MEMBER_ROWS = 50_000
+MAX_GROUP_DISTANCE_ROWS = 124_750
 MAX_TAXONOMY_TEST_GROUPS = 250_000
 _MEMBERSHIP_RELATIONS = {
     "HOG": "hog_memberships",
@@ -102,6 +104,18 @@ class OrthoFinderQueryService:
         )
         return tuple(str(row["group_type"]) for row in rows)
 
+    def has_relation(self, *, relation: str) -> bool:
+        """Return whether a validated resource exposes one exact relation.
+
+        Args:
+            relation: Unquoted DuckDB relation name.
+
+        Returns:
+            ``True`` only for relations observed while opening the resource.
+        """
+
+        return relation in self.resource.relations
+
     def list_hierarchy_nodes(self, *, group_type: str = "") -> tuple[str, ...]:
         """Return available hierarchy nodes, optionally for one group type.
 
@@ -143,7 +157,37 @@ class OrthoFinderQueryService:
             ),
             parameters=(),
         )
-        return {key: int(value) for key, value in rows[0].items()}
+        counts = {key: int(value) for key, value in rows[0].items()}
+        counts["portable_tree_count"] = 0
+        if self.has_relation(relation="tree_payloads"):
+            counts["portable_tree_count"] = int(
+                self._query(
+                    sql="SELECT count(*) AS tree_count FROM tree_payloads",
+                    parameters=(),
+                )[0]["tree_count"]
+            )
+        return counts
+
+    def overview_authorities(self) -> tuple[dict[str, Any], ...]:
+        """Return compact run-wide group authority summaries.
+
+        Returns:
+            One deterministic record per group type and hierarchy node.
+        """
+
+        rows = self._query(
+            sql=(
+                "SELECT group_type, hierarchy_node, count(*) AS group_count, "
+                "min(member_count) AS minimum_members, "
+                "median(member_count) AS median_members, "
+                "max(member_count) AS maximum_members, "
+                "avg(species_count) AS mean_species, "
+                "max(species_count) AS maximum_species FROM group_statistics "
+                "GROUP BY group_type, hierarchy_node ORDER BY group_type, hierarchy_node"
+            ),
+            parameters=(),
+        )
+        return tuple(rows)
 
     def search_groups(self, *, filters: GroupSearchFilters) -> SearchPage:
         """Return one bounded page matching exact search semantics.
@@ -252,8 +296,8 @@ class OrthoFinderQueryService:
             raise InputValidationError(f"maximum must be between 1 and {MAX_GROUP_MEMBER_ROWS:,}.")
         rows = self._query(
             sql=(
-                "SELECT species_label, member_id, legacy_orthogroup_id, "
-                "gene_tree_parent_clade FROM "
+                "SELECT run_id, group_type, hierarchy_node, group_id, species_label, "
+                "member_id, legacy_orthogroup_id, gene_tree_parent_clade FROM "
                 f"{relation} WHERE run_id = ? AND group_type = ? "
                 "AND hierarchy_node = ? AND group_id = ? "
                 "ORDER BY species_label, member_id LIMIT ?"
@@ -261,6 +305,163 @@ class OrthoFinderQueryService:
             parameters=(*_key_parameters(key=key), maximum),
         )
         return tuple(rows)
+
+    def get_group_distances(
+        self,
+        *,
+        key: GroupKey,
+        distance_method: str = "",
+        maximum: int = MAX_GROUP_DISTANCE_ROWS,
+    ) -> tuple[dict[str, Any], ...]:
+        """Return bounded persisted member-to-member distance records.
+
+        Args:
+            key: Composite run-scoped group identity.
+            distance_method: Optional exact calculation method.
+            maximum: Maximum rows permitted in the application process.
+
+        Returns:
+            Complete persisted rows when their count is within ``maximum``.
+
+        Raises:
+            InputValidationError: If the relation is absent or exceeds the safe bound.
+        """
+
+        if not self.has_relation(relation="pairwise_distances"):
+            return ()
+        if not 1 <= maximum <= MAX_GROUP_DISTANCE_ROWS:
+            raise InputValidationError(
+                f"maximum must be between 1 and {MAX_GROUP_DISTANCE_ROWS:,}."
+            )
+        condition = (
+            "run_id = ? AND group_type = ? AND hierarchy_node = ? AND group_id = ?"
+        )
+        parameters: tuple[object, ...] = _key_parameters(key=key)
+        if distance_method:
+            condition += " AND distance_method = ?"
+            parameters = (*parameters, distance_method)
+        count = int(
+            self._query(
+                sql=f"SELECT count(*) AS row_count FROM pairwise_distances WHERE {condition}",
+                parameters=parameters,
+            )[0]["row_count"]
+        )
+        if count > maximum:
+            raise InputValidationError(
+                f"Persisted distances for {key.display_label()} contain {count:,} rows; "
+                f"the interactive limit is {maximum:,}."
+            )
+        rows = self._query(
+            sql=(
+                "SELECT run_id, group_type, hierarchy_node, group_id, member_a, "
+                "member_b, distance_method, distance, comparable_sites, mismatch_sites, "
+                "computation_status, source_file FROM pairwise_distances WHERE "
+                f"{condition} ORDER BY member_a, member_b"
+            ),
+            parameters=parameters,
+        )
+        return tuple(rows)
+
+    def get_group_sequence_aliases(self, *, key: GroupKey) -> tuple[dict[str, Any], ...]:
+        """Return canonical-to-internal aliases for members of one group.
+
+        Args:
+            key: Composite run-scoped group identity.
+
+        Returns:
+            Exact member, species and internal identifier triples. An empty tuple is
+            valid when ``SequenceIDs.txt`` was unavailable during resource creation.
+        """
+
+        relation = _MEMBERSHIP_RELATIONS.get(key.group_type)
+        if relation is None:
+            raise InputValidationError(f"Unsupported group type: {key.group_type}")
+        if not self.has_relation(relation="sequences"):
+            return ()
+        rows = self._query(
+            sql=(
+                "SELECT DISTINCT s.member_id, s.species_label, s.internal_id "
+                f"FROM sequences AS s JOIN {relation} AS m "
+                "ON m.run_id = s.run_id AND m.member_id = s.member_id "
+                "AND m.species_label = s.species_label WHERE m.run_id = ? "
+                "AND m.group_type = ? AND m.hierarchy_node = ? AND m.group_id = ? "
+                "ORDER BY s.member_id, s.species_label, s.internal_id"
+            ),
+            parameters=_key_parameters(key=key),
+        )
+        return tuple(rows)
+
+    def get_portable_tree(
+        self, *, key: GroupKey, legacy_orthogroup_id: str = ""
+    ) -> dict[str, Any] | None:
+        """Return the preferred portable gene tree for one group.
+
+        Args:
+            key: Composite run-scoped group identity.
+            legacy_orthogroup_id: Optional parent orthogroup tree identifier for a HOG.
+
+        Returns:
+            Checksum-bound compressed tree record, or ``None`` for schema-2 resources.
+
+        Raises:
+            InputValidationError: If duplicate preferred payloads make authority ambiguous.
+        """
+
+        if not self.has_relation(relation="tree_payloads"):
+            return None
+        derived_tree_id = _tree_id_from_hog(group_id=key.group_id)
+        candidates = tuple(
+            dict.fromkeys(
+                value
+                for value in (
+                    legacy_orthogroup_id.strip(),
+                    derived_tree_id,
+                    key.group_id,
+                )
+                if value
+            )
+        )
+        if not candidates:
+            return None
+        placeholders = ", ".join("?" for _ in candidates)
+        rows = self._query(
+            sql=(
+                "SELECT run_id, tree_type, tree_id, group_id, source_path, "
+                "source_size_bytes, source_sha256, payload_encoding, newick_payload "
+                "FROM tree_payloads WHERE run_id = ? AND tree_id IN ("
+                f"{placeholders}) ORDER BY CASE tree_type "
+                "WHEN 'RESOLVED_GENE_TREE' THEN 0 WHEN 'GENE_TREE' THEN 1 ELSE 2 END, "
+                "tree_id"
+            ),
+            parameters=(self.resource.run_id, *candidates),
+        )
+        if not rows:
+            return None
+        rows.sort(
+            key=lambda row: _tree_priority(
+                tree_type=str(row["tree_type"]),
+                tree_id=str(row["tree_id"]),
+                candidate_ids=candidates,
+            )
+        )
+        first = rows[0]
+        first_priority = _tree_priority(
+            tree_type=str(first["tree_type"]),
+            tree_id=str(first["tree_id"]),
+            candidate_ids=candidates,
+        )
+        if len(rows) > 1:
+            second = rows[1]
+            second_priority = _tree_priority(
+                tree_type=str(second["tree_type"]),
+                tree_id=str(second["tree_id"]),
+                candidate_ids=candidates,
+            )
+            if first_priority == second_priority:
+                raise InputValidationError(
+                    f"Multiple equally preferred portable trees match {key.display_label()}."
+                )
+        return first
 
     def search_taxonomy_groups(
         self,
@@ -589,6 +790,42 @@ def _key_parameters(*, key: GroupKey) -> tuple[str, str, str, str]:
     return key.run_id, key.group_type, key.hierarchy_node, key.group_id
 
 
+def _tree_priority(
+    *, tree_type: str, tree_id: str, candidate_ids: tuple[str, ...]
+) -> tuple[int, int]:
+    """Return deterministic portable-tree selection priority.
+
+    Args:
+        tree_type: Stored tree authority type.
+        tree_id: Stored tree identifier.
+        candidate_ids: Ordered group-derived candidate identifiers.
+
+    Returns:
+        Resolved-tree and preferred-identifier sort ranks.
+    """
+
+    type_rank = {"RESOLVED_GENE_TREE": 0, "GENE_TREE": 1}.get(tree_type, 2)
+    try:
+        identifier_rank = candidate_ids.index(tree_id)
+    except ValueError:
+        identifier_rank = len(candidate_ids)
+    return type_rank, identifier_rank
+
+
+def _tree_id_from_hog(*, group_id: str) -> str:
+    """Return OrthoFinder's corresponding OG tree ID for a canonical HOG ID.
+
+    Args:
+        group_id: Exact HOG identifier such as ``N0.HOG0000001``.
+
+    Returns:
+        Corresponding ``OG`` identifier, or an empty string for other formats.
+    """
+
+    match = re.fullmatch(r"N\d+\.HOG(\d+)", group_id)
+    return f"OG{match.group(1)}" if match is not None else ""
+
+
 def _taxonomy_summary_query(
     *,
     run_id: str,
@@ -628,14 +865,23 @@ def _taxonomy_summary_query(
         "LEFT JOIN taxonomy_map AS tm ON tm.species_label = gs.species_label "
         "WHERE g.run_id = ? AND g.group_type = ? AND g.hierarchy_node = ? "
         "GROUP BY g.run_id, g.group_type, g.hierarchy_node, g.group_id, "
-        "g.legacy_orthogroup_id, g.member_count, g.species_count) "
-        "SELECT *, target_species_count::DOUBLE / ? AS target_coverage, "
-        "CASE WHEN target_species_count + outside_species_count > 0 THEN "
-        "target_species_count::DOUBLE / (target_species_count + outside_species_count) "
+        "g.legacy_orthogroup_id, g.member_count, g.species_count), "
+        "preferred_distance AS (SELECT *, row_number() OVER (PARTITION BY run_id, "
+        "group_type, hierarchy_node, group_id ORDER BY CASE WHEN distance_pair_count > 0 "
+        "THEN 0 ELSE 1 END, distance_method) AS app_distance_rank "
+        "FROM distance_statistics) "
+        "SELECT s.*, d.distance_method, d.computation_status, d.sampled_member_count, "
+        "d.distance_pair_count, d.mean_distance, d.median_distance, "
+        "d.population_stddev_distance, s.target_species_count::DOUBLE / ? "
+        "AS target_coverage, "
+        "CASE WHEN s.target_species_count + s.outside_species_count > 0 THEN "
+        "s.target_species_count::DOUBLE / (s.target_species_count + s.outside_species_count) "
         "ELSE 0.0 END AS mapped_target_fraction, "
-        "coalesce(outsider_species, '') AS outsider_species_labels, "
-        "coalesce(unresolved_species, '') AS unresolved_species_labels "
-        "FROM summaries"
+        "coalesce(s.outsider_species, '') AS outsider_species_labels, "
+        "coalesce(s.unresolved_species, '') AS unresolved_species_labels "
+        "FROM summaries AS s LEFT JOIN preferred_distance AS d ON d.run_id = s.run_id "
+        "AND d.group_type = s.group_type AND d.hierarchy_node = s.hierarchy_node "
+        "AND d.group_id = s.group_id AND d.app_distance_rank = 1"
     )
     return sql, tuple(parameters)
 

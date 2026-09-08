@@ -466,6 +466,7 @@ def test_qc_failure_states_and_report_limit_errors(
         species_count=0,
         sequence_count=0,
         tree_inventory_count=0,
+        tree_payload_count=0,
         tree_node_count=0,
         distance_count=0,
         offline_report=False,

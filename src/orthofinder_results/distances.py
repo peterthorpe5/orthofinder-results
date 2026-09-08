@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import math
 import statistics
 from collections.abc import Iterable, Mapping, Sequence
@@ -222,23 +223,105 @@ def calculate_patristic_distances(
         DistanceCalculationError: If leaves are duplicated, missing, insufficient or unscaled.
     """
 
-    from Bio import Phylo
-    from Bio.Phylo.NewickIO import NewickError
-
     source = Path(tree_path).expanduser().resolve()
     provenance_source = source_file or str(source)
     if not source.is_file() or source.stat().st_size == 0:
         raise DistanceCalculationError(f"Missing or empty tree: {source}")
     try:
-        tree = Phylo.read(str(source), "newick")
+        newick_text = source.read_text(encoding="utf-8", errors="strict")
+    except (OSError, UnicodeError) as error:
+        raise DistanceCalculationError(f"Could not read tree {source}: {error}") from error
+    return calculate_patristic_distances_from_newick(
+        newick_text=newick_text,
+        run_id=run_id,
+        group_type=group_type,
+        hierarchy_node=hierarchy_node,
+        group_id=group_id,
+        max_members=max_members,
+        member_ids=member_ids,
+        member_aliases=member_aliases,
+        source_file=provenance_source,
+    )
+
+
+def calculate_patristic_distances_from_newick(
+    *,
+    newick_text: str,
+    run_id: str,
+    group_type: str,
+    hierarchy_node: str,
+    group_id: str,
+    max_members: int,
+    member_ids: Sequence[str] | None = None,
+    member_aliases: Mapping[str, Mapping[str, str]] | None = None,
+    source_file: str = "portable tree payload",
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Calculate pairwise branch-length distances from portable Newick text.
+
+    Args:
+        newick_text: Complete verified Newick document.
+        run_id: Immutable run identifier.
+        group_type: Run-scoped group semantics.
+        hierarchy_node: Optional HOG node.
+        group_id: Run-scoped group identifier.
+        max_members: Maximum leaves in the exact or sampled matrix.
+        member_ids: Optional canonical member subset.
+        member_aliases: Alternative tree labels and their resolution methods.
+        source_file: Portable provenance label stored in every result row.
+
+    Returns:
+        Pairwise patristic records and a distribution summary.
+
+    Raises:
+        DistanceCalculationError: If parsing or identifier resolution fails.
+    """
+
+    from Bio import Phylo
+    from Bio.Phylo.NewickIO import NewickError
+
+    if not newick_text.strip():
+        raise DistanceCalculationError(f"Missing or empty tree: {source_file}")
+    try:
+        tree = Phylo.read(io.StringIO(newick_text), "newick")
     except (NewickError, ValueError, OSError) as error:
-        raise DistanceCalculationError(f"Could not parse tree {source}: {error}") from error
+        raise DistanceCalculationError(
+            f"Could not parse tree {source_file}: {error}"
+        ) from error
+    return _calculate_patristic_tree(
+        tree=tree,
+        source_label=source_file,
+        run_id=run_id,
+        group_type=group_type,
+        hierarchy_node=hierarchy_node,
+        group_id=group_id,
+        max_members=max_members,
+        member_ids=member_ids,
+        member_aliases=member_aliases,
+    )
+
+
+def _calculate_patristic_tree(
+    *,
+    tree: Any,
+    source_label: str,
+    run_id: str,
+    group_type: str,
+    hierarchy_node: str,
+    group_id: str,
+    max_members: int,
+    member_ids: Sequence[str] | None,
+    member_aliases: Mapping[str, Mapping[str, str]] | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Calculate distances from one already parsed Biopython tree."""
+
     terminals = tree.get_terminals()
     names = [terminal.name or "" for terminal in terminals]
     if any(not name for name in names):
-        raise DistanceCalculationError(f"Tree contains an unnamed leaf: {source}")
+        raise DistanceCalculationError(f"Tree contains an unnamed leaf: {source_label}")
     if len(set(names)) != len(names):
-        raise DistanceCalculationError(f"Tree contains duplicate leaf names: {source}")
+        raise DistanceCalculationError(
+            f"Tree contains duplicate leaf names: {source_label}"
+        )
     available = set(names)
     requested = tuple(names) if member_ids is None else tuple(member_ids)
     if len(set(requested)) != len(requested):
@@ -263,7 +346,7 @@ def calculate_patristic_distances(
         if len(matches) > 1:
             labels = ";".join(sorted(candidate for candidate, _ in matches))
             raise DistanceCalculationError(
-                f"Tree {source} has ambiguous labels for canonical member "
+                f"Tree {source_label} has ambiguous labels for canonical member "
                 f"{member_id!r}: {labels}"
             )
         tree_label, resolution_method = matches[0]
@@ -272,7 +355,7 @@ def calculate_patristic_distances(
     if missing:
         preview = ";".join(sorted(missing)[:10])
         raise DistanceCalculationError(
-            f"Tree {source} lacks {len(missing)} requested members: {preview}"
+            f"Tree {source_label} lacks {len(missing)} requested members: {preview}"
         )
     reverse: dict[str, list[str]] = {}
     for member_id, tree_label in resolved_leaves.items():
@@ -296,15 +379,22 @@ def calculate_patristic_distances(
     )
     if len(selected) < 2:
         raise DistanceCalculationError(f"Group {group_id} contains fewer than two tree leaves.")
-    leaves = {terminal.name: terminal for terminal in terminals}
+    leaf_indices, parent_indices, levels, root_distances = _index_patristic_tree(
+        tree=tree,
+        source_label=source_label,
+    )
+    ancestors = _binary_ancestor_table(parent_indices=parent_indices)
     rows: list[dict[str, Any]] = []
     for left_index, member_a in enumerate(selected):
         for member_b in selected[left_index + 1 :]:
-            distance = tree.distance(
-                leaves[resolved_leaves[member_a]],
-                leaves[resolved_leaves[member_b]],
+            distance = _indexed_patristic_distance(
+                left_index=leaf_indices[resolved_leaves[member_a]],
+                right_index=leaf_indices[resolved_leaves[member_b]],
+                levels=levels,
+                root_distances=root_distances,
+                ancestors=ancestors,
             )
-            if distance is None or not math.isfinite(float(distance)):
+            if not math.isfinite(distance) or distance < 0:
                 raise DistanceCalculationError(
                     f"Tree distance is not finite for {member_a!r} and {member_b!r}."
                 )
@@ -321,7 +411,7 @@ def calculate_patristic_distances(
                     "comparable_sites": "",
                     "mismatch_sites": "",
                     "computation_status": status,
-                    "source_file": provenance_source,
+                    "source_file": source_label,
                 }
             )
     identifier_resolution = (
@@ -340,9 +430,122 @@ def calculate_patristic_distances(
         total_member_count=len(requested),
         sampled_member_count=len(selected),
         member_identifier_resolution=identifier_resolution,
-        source_file=provenance_source,
+        source_file=source_label,
     )
     return rows, summary
+
+
+def _index_patristic_tree(
+    *, tree: Any, source_label: str
+) -> tuple[dict[str, int], tuple[int, ...], tuple[int, ...], tuple[float, ...]]:
+    """Index a rooted tree for logarithmic-time least-common-ancestor queries.
+
+    Args:
+        tree: Parsed Biopython tree.
+        source_label: Human-readable tree provenance for controlled errors.
+
+    Returns:
+        Leaf indices, immediate parents, topological levels and root distances.
+
+    Raises:
+        DistanceCalculationError: If a branch length is non-finite or negative.
+    """
+
+    clades = list(tree.find_clades(order="preorder"))
+    index_by_identity = {id(clade): index for index, clade in enumerate(clades)}
+    parent_indices = [-1] * len(clades)
+    levels = [0] * len(clades)
+    root_distances = [0.0] * len(clades)
+    for parent in clades:
+        parent_index = index_by_identity[id(parent)]
+        for child in parent.clades:
+            child_index = index_by_identity[id(child)]
+            raw_length = 0.0 if child.branch_length is None else float(child.branch_length)
+            if not math.isfinite(raw_length) or raw_length < 0:
+                raise DistanceCalculationError(
+                    f"Tree contains an invalid branch length in {source_label}."
+                )
+            parent_indices[child_index] = parent_index
+            levels[child_index] = levels[parent_index] + 1
+            root_distances[child_index] = root_distances[parent_index] + raw_length
+    leaf_indices = {
+        str(clade.name): index_by_identity[id(clade)]
+        for clade in clades
+        if clade.is_terminal()
+    }
+    return (
+        leaf_indices,
+        tuple(parent_indices),
+        tuple(levels),
+        tuple(root_distances),
+    )
+
+
+def _binary_ancestor_table(*, parent_indices: Sequence[int]) -> tuple[tuple[int, ...], ...]:
+    """Build a binary-lifting ancestor table for a rooted tree.
+
+    Args:
+        parent_indices: Immediate parent index for every node, with ``-1`` at the root.
+
+    Returns:
+        Ancestor rows for powers of two up to the maximum required jump.
+    """
+
+    if not parent_indices:
+        return ()
+    levels = max(1, len(parent_indices).bit_length())
+    table = [tuple(parent_indices)]
+    for _ in range(1, levels):
+        previous = table[-1]
+        table.append(
+            tuple(-1 if parent < 0 else previous[parent] for parent in previous)
+        )
+    return tuple(table)
+
+
+def _indexed_patristic_distance(
+    *,
+    left_index: int,
+    right_index: int,
+    levels: Sequence[int],
+    root_distances: Sequence[float],
+    ancestors: Sequence[Sequence[int]],
+) -> float:
+    """Return one branch-length distance using a binary ancestor index.
+
+    Args:
+        left_index: First leaf node index.
+        right_index: Second leaf node index.
+        levels: Root-relative topological levels.
+        root_distances: Root-relative cumulative branch lengths.
+        ancestors: Binary-lifting ancestor table.
+
+    Returns:
+        Patristic distance between the two indexed leaves.
+    """
+
+    original_left, original_right = left_index, right_index
+    if levels[left_index] < levels[right_index]:
+        left_index, right_index = right_index, left_index
+    difference = levels[left_index] - levels[right_index]
+    bit = 0
+    while difference:
+        if difference & 1:
+            left_index = ancestors[bit][left_index]
+        difference >>= 1
+        bit += 1
+    if left_index != right_index:
+        for row in reversed(ancestors):
+            left_parent, right_parent = row[left_index], row[right_index]
+            if left_parent != right_parent:
+                left_index, right_index = left_parent, right_parent
+        left_index = ancestors[0][left_index]
+    common_distance = root_distances[left_index]
+    return (
+        root_distances[original_left]
+        + root_distances[original_right]
+        - 2.0 * common_distance
+    )
 
 
 def pairwise_p_distance(*, sequence_a: str, sequence_b: str) -> tuple[float | None, int, int]:
