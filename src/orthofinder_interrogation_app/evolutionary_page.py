@@ -36,6 +36,52 @@ _LOGGER = logging.getLogger("orthofinder_interrogation_app.evolutionary_page")
 ACTIVE_GROUP_STATE = "orthofinder_active_group"
 COMPARISON_STATE = "orthofinder_comparison_groups"
 
+_MEMBER_DISPERSION_HELP = {
+    "Protein ID": "Exact identifier of one analysed protein.",
+    "Species": "Exact species label for that protein.",
+    "Average distance to all others": (
+        "Mean distance from this protein to every other analysed protein."
+    ),
+    "Median distance to all others": (
+        "Median distance from this protein to every other analysed protein."
+    ),
+    "Distance spread (SD)": (
+        "Population standard deviation of this protein's distances to all others."
+    ),
+    "Nearest protein": "Analysed protein with the smallest pair distance from this protein.",
+    "Nearest protein's species": "Species label of the nearest analysed protein.",
+    "Nearest distance": "Exact distance to the nearest analysed protein.",
+    "Sample medoid": (
+        "Yes for the analysed protein with the smallest average distance to all others."
+    ),
+}
+_SPECIES_DISPERSION_HELP = {
+    "Species A": "First species in the deterministic species-pair label.",
+    "Species B": "Second species in the deterministic species-pair label.",
+    "Pair class": "Within species when both endpoints share a label; otherwise between species.",
+    "Protein pairs": "Number of exact protein-pair distances in this species pairing.",
+    "Average pair distance": "Mean exact distance for this species pairing.",
+    "Median pair distance": "Median exact distance for this species pairing.",
+    "Distance spread (SD)": "Population standard deviation for this species pairing.",
+    "Smallest pair distance": "Minimum exact distance in this species pairing.",
+    "Largest pair distance": "Maximum exact distance in this species pairing.",
+}
+_PAIR_DISTANCE_HELP = {
+    "Protein A": "First endpoint protein identifier.",
+    "Species A": "Species of the first endpoint.",
+    "Protein B": "Second endpoint protein identifier.",
+    "Species B": "Species of the second endpoint.",
+    "Pair distance": "Exact supplied or calculated distance between the two proteins.",
+    "Distance method": "Method used to calculate this pair distance.",
+    "Calculation scope": "Whether the matrix is complete or a deterministic bounded sample.",
+    "Comparable sites": "Aligned positions compared when sequence distances are used.",
+    "Mismatch sites": "Differing aligned positions when sequence distances are used.",
+}
+_MEMBER_HELP = {
+    "Protein ID": "Exact protein identifier represented in the displayed analysis.",
+    "Species": "Exact species label assigned to this protein in the resource.",
+}
+
 
 def render_evolutionary_views(
     *,
@@ -55,11 +101,10 @@ def render_evolutionary_views(
     if service is None or cache_dir is None:
         _render_report_only(resource=resource, catalog=catalog)
         return
-    st.header("Cluster explorer")
+    st.header("Explore one cluster")
     st.caption(
-        "Inspect one group through several linked views. Exact pair distances and the "
-        "branch-length phylogram retain quantitative scale; force-layout spacing and PCoA "
-        "screen geometry require the stated interpretation checks."
+        "Inspect one group through linked views. Begin with Distance spread for compactness, "
+        "then use the gene-tree phylogram and exact distance heatmap to confirm patterns."
     )
     key = _select_group(service=service, catalog=catalog)
     if key is None:
@@ -68,7 +113,7 @@ def render_evolutionary_views(
     controls = st.columns((2, 2, 2, 3))
     max_members = int(
         controls[0].select_slider(
-            "Maximum lazy-analysis members",
+            "Maximum proteins for a new calculation",
             options=(50, 100, 250, 500),
             value=250,
             help=(
@@ -80,7 +125,7 @@ def render_evolutionary_views(
     )
     nearest_neighbours = int(
         controls[1].slider(
-            "Nearest neighbours",
+            "Neighbours retained per protein",
             min_value=1,
             max_value=10,
             value=3,
@@ -88,12 +133,15 @@ def render_evolutionary_views(
         )
     )
     force_recompute = controls[2].checkbox(
-        "Recalculate lazy cache",
+        "Recalculate saved on-demand result",
         value=False,
-        help="Persisted schema-2 and DuckDB distances are never recalculated.",
+        help=(
+            "Rebuild only a schema-3 on-demand sidecar result. Stored schema-2 and DuckDB "
+            "distance authorities are never recalculated or modified."
+        ),
     )
     controls[3].caption(
-        "On-demand results are cached in the configured user sidecar. The completed "
+        "New bounded results are saved in the configured user cache. The completed "
         "resource remains read-only."
     )
     provider = DistanceAnalysisProvider(
@@ -169,10 +217,10 @@ def _render_report_only(
     linked = linked_member_ids(entry=entry)
     tabs = st.tabs(
         (
-            "PCoA + diagnostics",
-            "Shepard plot",
-            "Branch-length phylogram",
-            "Exact distance matrix",
+            "PCoA view & fit",
+            "Distance-fit check",
+            "Gene-tree phylogram",
+            "Distance heatmap",
             "Nearest-neighbour topology",
         )
     )
@@ -208,12 +256,12 @@ def _select_group(
             if stored is not None and stored.display_label() in label_to_key:
                 default_index = labels.index(stored.display_label())
             selected = st.selectbox(
-                "Precomputed pilot groups",
+                "Groups with stored pilot distances",
                 labels,
                 index=default_index,
                 help="These open immediately from the existing exact report matrices.",
             )
-            if st.button("Use selected pilot group"):
+            if st.button("Use selected stored group"):
                 stored = label_to_key[selected]
                 _store_active_group(key=stored)
         with st.form("exact_cluster_key"):
@@ -221,23 +269,29 @@ def _select_group(
             group_types = service.list_group_types()
             initial_type = stored.group_type if stored is not None else group_types[0]
             group_type = columns[0].selectbox(
-                "Exact group type",
+                "Group system",
                 group_types,
                 index=group_types.index(initial_type) if initial_type in group_types else 0,
+                help=(
+                    "HOG is a hierarchical orthogroup at one species-tree level; "
+                    "LEGACY_ORTHOGROUP is the flat Orthogroups.tsv collection."
+                ),
             )
             nodes = service.list_hierarchy_nodes(group_type=group_type)
             initial_node = stored.hierarchy_node if stored is not None else nodes[0]
             hierarchy_node = columns[1].selectbox(
-                "Exact hierarchy node",
+                "Species-tree level",
                 nodes,
                 format_func=lambda value: value or "ROOT",
                 index=nodes.index(initial_node) if initial_node in nodes else 0,
+                help="Exact OrthoFinder node at which this HOG membership is defined.",
             )
             group_id = columns[2].text_input(
-                "Exact group identifier",
+                "Exact group ID",
                 value=stored.group_id if stored is not None else "",
+                help="Enter the complete group identifier, for example N0.HOG0000001.",
             )
-            submitted = st.form_submit_button("Open exact cluster", type="primary")
+            submitted = st.form_submit_button("Open cluster", type="primary")
         if submitted:
             candidate = GroupKey(
                 run_id=service.resource.run_id,
@@ -287,26 +341,36 @@ def _render_analysis(*, analysis: GroupAnalysis, nearest_neighbours: int) -> Non
 
     entry = analysis.visual_entry
     _render_distance_scope(entry=entry)
-    st.caption(
-        f"Analysis source: {analysis.source}; cache: {analysis.cache_status}; tree authority: "
-        f"{analysis.tree_authority or 'not required/unavailable'}."
-    )
+    with st.expander("Technical analysis details", expanded=False):
+        st.caption(
+            f"Analysis source: {analysis.source}; cache: {analysis.cache_status}; "
+            f"tree authority: {analysis.tree_authority or 'not required/unavailable'}."
+        )
+        st.write(
+            "These codes preserve exactly where the displayed matrix came from. They are "
+            "also retained in machine-readable downloads and logs."
+        )
     member_species = {
         str(row["member_id"]): str(row["species_label"]) for row in analysis.members
     }
     columns = st.columns(2)
     selected_species = tuple(
         columns[0].multiselect(
-            "Linked species selection",
+            "Highlight species across all views",
             tuple(sorted(set(member_species.values()))),
             key=f"linked_species_{_state_token(key=analysis.key)}",
+            help=(
+                "Highlights every analysed protein from the selected species in all linked "
+                "plots; it does not remove other proteins."
+            ),
         )
     )
     selected_members = tuple(
         columns[1].multiselect(
-            "Linked member selection",
+            "Highlight proteins across all views",
             tuple(sorted(member_species)),
             key=f"linked_members_{_state_token(key=analysis.key)}",
+            help="Highlights exact protein identifiers in each linked plot.",
         )
     )
     linked = linked_member_ids(
@@ -330,13 +394,13 @@ def _render_analysis(*, analysis: GroupAnalysis, nearest_neighbours: int) -> Non
         return
     tabs = st.tabs(
         (
-            "Interactive force network",
-            "Dispersion dashboard",
-            "PCoA diagnostics",
-            "Branch-length phylogram",
-            "Exact matrix",
-            "Pair distances",
-            "Members",
+            "Interactive network",
+            "Distance spread",
+            "PCoA views",
+            "Gene-tree phylogram",
+            "Distance heatmap",
+            "Protein-pair distances",
+            "Proteins",
         )
     )
     with tabs[0]:
@@ -368,14 +432,26 @@ def _render_force_network(
 ) -> None:
     """Render the promoted draggable topology and a static alternative."""
 
+    st.write(
+        "Use this view to inspect local neighbourhoods and disconnected regions. Node "
+        "positions are produced by the interactive layout and are not a distance scale."
+    )
     controls = st.columns(3)
     connectors = controls[0].checkbox(
         "Show layout-only connectors",
         value=False,
         help="Dashed connectors join raw components only for layout continuity.",
     )
-    labels = controls[1].checkbox("Show every member label", value=False)
-    physics = controls[2].checkbox("Keep node physics active", value=True)
+    labels = controls[1].checkbox(
+        "Show every protein label",
+        value=False,
+        help="Large labels can obscure dense groups; hover remains available when disabled.",
+    )
+    physics = controls[2].checkbox(
+        "Keep layout movement active",
+        value=True,
+        help="Disable after arranging nodes if a stable view is easier to inspect.",
+    )
     try:
         document = force_directed_html(
             entry=entry,
@@ -396,7 +472,7 @@ def _render_force_network(
         f"{int(metrics.get('rawIsolateCount', 0)):,} isolates. Force-layout spacing is "
         "non-quantitative; components are not OrthoFinder splits."
     )
-    with st.expander("Static nearest-neighbour topology"):
+    with st.expander("Static nearest-neighbour topology (alternative view)"):
         _render_topology(
             entry=entry,
             linked=linked,
@@ -412,6 +488,23 @@ def _render_dispersion(
 ) -> None:
     """Render complementary exact-distance dispersion summaries."""
 
+    st.write(
+        "These views show whether exact pair distances form a tight, broad or multi-scale "
+        "distribution. Compare within-species and between-species distances before treating "
+        "a group as uniformly compact."
+    )
+    with st.expander("How to read the distance-spread views"):
+        st.markdown(
+            """
+            - **Histogram:** where pair distances occur most often.
+            - **Violin + box:** distribution shape, median and central range for within- and
+              between-species pairs.
+            - **Empirical CDF:** the fraction of pairs at or below each distance; a curve farther
+              left represents generally smaller distances.
+            - **Per-protein dispersion:** identifies central and peripheral proteins.
+            - **Species-pair heatmap:** compares average distance among each pair of species.
+            """
+        )
     st.plotly_chart(
         distance_distribution_figure(rows=analysis.distances),
         width="stretch",
@@ -422,7 +515,7 @@ def _render_dispersion(
         width="stretch",
         config={"displaylogo": False},
     )
-    secondary = st.tabs(("Distance from sample medoid", "Species-pair heatmap", "Tables"))
+    secondary = st.tabs(("Distance from sample medoid", "Species-pair heatmap", "Data tables"))
     with secondary[0]:
         st.plotly_chart(
             medoid_distance_figure(rows=analysis.distances, member_rows=member_rows),
@@ -441,16 +534,26 @@ def _render_dispersion(
         )
     with secondary[2]:
         species_rows = species_dispersion_rows(rows=analysis.distances)
-        st.subheader("Per-member dispersion")
-        st.dataframe(member_rows, width="stretch", hide_index=True)
+        st.subheader("Per-protein distance summary")
+        st.dataframe(
+            tuple(_display_member_dispersion_row(row=row) for row in member_rows),
+            width="stretch",
+            hide_index=True,
+            column_config=_column_config(descriptions=_MEMBER_DISPERSION_HELP),
+        )
         st.download_button(
             "Download per-member dispersion as TSV",
             data=records_to_tsv(records=member_rows),
             file_name=f"{analysis.key.group_id}_member_dispersion.tsv",
             mime="text/tab-separated-values",
         )
-        st.subheader("Species-pair dispersion")
-        st.dataframe(species_rows, width="stretch", hide_index=True)
+        st.subheader("Species-pair distance summary")
+        st.dataframe(
+            tuple(_display_species_dispersion_row(row=row) for row in species_rows),
+            width="stretch",
+            hide_index=True,
+            column_config=_column_config(descriptions=_SPECIES_DISPERSION_HELP),
+        )
         st.download_button(
             "Download species-pair dispersion as TSV",
             data=records_to_tsv(records=species_rows),
@@ -464,19 +567,66 @@ def _render_enhanced_pcoa(
 ) -> None:
     """Render original, selectable-axis and rotatable 3D PCoA diagnostics."""
 
+    st.write(
+        "PCoA approximates every exact pair distance with two or three plotting axes. "
+        "Rotate the 3D view and use the fit measures below to decide how much confidence "
+        "to place in apparent screen geometry."
+    )
+    with st.expander("How to judge a PCoA view"):
+        st.markdown(
+            """
+            - **Variation shown** is the positive coordinate-space inertia retained by the
+              displayed axes; larger is better, but it is not a biological variance estimate.
+            - **Distortion (stress)** compares plotted and exact distances; lower is better.
+            - **Distance agreement** is their Pearson correlation; nearer 1 is better.
+            - The **distance-fit check (Shepard plot)** shows exact distance against plotted
+              distance directly. Curvature or broad scatter indicates distortion.
+            """
+        )
     metrics = st.columns(6)
-    metrics[0].metric("2D positive inertia", _format_percent(sum(geometry.axis_fractions[:2])))
-    metrics[1].metric("3D positive inertia", _format_percent(geometry.cumulative_fraction))
-    metrics[2].metric("2D stress", _format_optional(geometry.stress_2d))
-    metrics[3].metric("3D stress", _format_optional(geometry.stress_3d))
-    metrics[4].metric("2D correlation", _format_optional(geometry.correlation_2d))
-    metrics[5].metric("3D correlation", _format_optional(geometry.correlation_3d))
+    metrics[0].metric(
+        "Variation shown in 2D",
+        _format_percent(sum(geometry.axis_fractions[:2])),
+        help="Fraction of positive PCoA inertia retained by axes 1 and 2.",
+    )
+    metrics[1].metric(
+        "Variation shown in 3D",
+        _format_percent(geometry.cumulative_fraction),
+        help="Fraction of positive PCoA inertia retained by axes 1, 2 and 3.",
+    )
+    metrics[2].metric(
+        "2D distortion (stress)",
+        _format_optional(geometry.stress_2d),
+        help="Normalised distance distortion in two axes; lower values are better.",
+    )
+    metrics[3].metric(
+        "3D distortion (stress)",
+        _format_optional(geometry.stress_3d),
+        help="Normalised distance distortion in three axes; lower values are better.",
+    )
+    metrics[4].metric(
+        "2D distance agreement",
+        _format_optional(geometry.correlation_2d),
+        help="Pearson correlation between exact and two-dimensional plotted distances.",
+    )
+    metrics[5].metric(
+        "3D distance agreement",
+        _format_optional(geometry.correlation_3d),
+        help="Pearson correlation between exact and three-dimensional plotted distances.",
+    )
     if geometry.stress_3d < geometry.stress_2d:
         st.info(
             "The third axis reduces distance distortion, but the exact matrix and "
             "branch-length phylogram remain the quantitative authorities."
         )
-    views = st.tabs(("Rotatable 3D", "Choose two axes", "Original 2D", "Shepard plot"))
+    views = st.tabs(
+        (
+            "Rotate 3D",
+            "Choose two axes",
+            "Original 2D diagnostic",
+            "Distance-fit check (Shepard)",
+        )
+    )
     with views[0]:
         st.plotly_chart(
             pcoa_3d_figure(geometry=geometry, selected_members=linked),
@@ -485,9 +635,23 @@ def _render_enhanced_pcoa(
         )
     with views[1]:
         axis_controls = st.columns(2)
-        horizontal = int(axis_controls[0].selectbox("Horizontal axis", (1, 2, 3), index=0))
+        horizontal = int(
+            axis_controls[0].selectbox(
+                "Horizontal PCoA axis",
+                (1, 2, 3),
+                index=0,
+                help="Choose one of the first three positive-coordinate axes.",
+            )
+        )
         vertical_options = tuple(value for value in (1, 2, 3) if value != horizontal)
-        vertical = int(axis_controls[1].selectbox("Vertical axis", vertical_options, index=0))
+        vertical = int(
+            axis_controls[1].selectbox(
+                "Vertical PCoA axis",
+                vertical_options,
+                index=0,
+                help="Choose a different positive-coordinate axis.",
+            )
+        )
         st.plotly_chart(
             pcoa_axis_figure(
                 geometry=geometry,
@@ -512,10 +676,17 @@ def _render_pair_table(*, analysis: GroupAnalysis) -> None:
     """Render, filter and export actual member-to-member distances."""
 
     controls = st.columns(3)
-    member_text = controls[0].text_input("Endpoint member contains")
+    st.write(
+        "This is the quantitative authority behind the distribution plots and heatmap. "
+        "Each row is one exact pair among the proteins analysed for this view."
+    )
+    member_text = controls[0].text_input(
+        "Either protein ID contains",
+        help="Literal, case-insensitive text matched against both pair endpoints.",
+    )
     selected_species = tuple(
         controls[1].multiselect(
-            "Endpoint species",
+            "Either endpoint species",
             tuple(
                 sorted(
                     {
@@ -528,7 +699,9 @@ def _render_pair_table(*, analysis: GroupAnalysis) -> None:
         )
     )
     pair_scope = controls[2].selectbox(
-        "Pair scope", ("All pairs", "Within species", "Between species")
+        "Species relationship",
+        ("All pairs", "Within species", "Between species"),
+        help="Choose whether pair endpoints must share or differ in their species label.",
     )
     filtered = _filter_distance_rows(
         rows=analysis.distances,
@@ -539,22 +712,16 @@ def _render_pair_table(*, analysis: GroupAnalysis) -> None:
     st.caption(
         f"Showing {len(filtered):,} of {len(analysis.distances):,} exact displayed pairs."
     )
-    display_fields = (
-        "member_a",
-        "species_a",
-        "member_b",
-        "species_b",
-        "distance",
-        "distance_method",
-        "computation_status",
-        "comparable_sites",
-        "mismatch_sites",
+    display = tuple(_display_pair_distance_row(row=row) for row in filtered)
+    st.dataframe(
+        display,
+        width="stretch",
+        hide_index=True,
+        column_config=_column_config(descriptions=_PAIR_DISTANCE_HELP),
     )
-    display = tuple({field: row.get(field, "") for field in display_fields} for row in filtered)
-    st.dataframe(display, width="stretch", hide_index=True)
     st.download_button(
         "Download filtered member-to-member distances as TSV",
-        data=records_to_tsv(records=display),
+        data=records_to_tsv(records=filtered),
         file_name=f"{analysis.key.group_id}_member_pair_distances.tsv",
         mime="text/tab-separated-values",
     )
@@ -674,19 +841,51 @@ def _render_distance_scope(*, entry: dict[str, Any]) -> None:
 
     summary = _required_mapping(entry=entry, key="distanceSummary")
     columns = st.columns(6)
-    columns[0].metric("Analytical members", f"{int(summary['total_member_count']):,}")
-    columns[1].metric("Displayed sample", f"{int(summary['sampled_member_count']):,}")
-    columns[2].metric("Exact pairs", f"{int(summary['distance_pair_count']):,}")
-    columns[3].metric("Mean distance", _format_optional(summary.get("mean_distance")))
-    columns[4].metric("Median distance", _format_optional(summary.get("median_distance")))
+    columns[0].metric(
+        "Proteins in full group",
+        f"{int(summary['total_member_count']):,}",
+        help="Complete group membership before any bounded distance sampling.",
+    )
+    columns[1].metric(
+        "Proteins analysed",
+        f"{int(summary['sampled_member_count']):,}",
+        help="Proteins included in every distance view below.",
+    )
+    columns[2].metric(
+        "Protein pairs compared",
+        f"{int(summary['distance_pair_count']):,}",
+        help="Exact number of pair distances represented below.",
+    )
+    columns[3].metric(
+        "Average pair distance",
+        _format_optional(summary.get("mean_distance")),
+        help="Mean distance across all displayed protein pairs; smaller is more compact.",
+    )
+    columns[4].metric(
+        "Median pair distance",
+        _format_optional(summary.get("median_distance")),
+        help="Middle displayed pair distance, which is less affected by extremes than the mean.",
+    )
     columns[5].metric(
-        "Distance SD", _format_optional(summary.get("population_stddev_distance"))
+        "Distance spread (SD)",
+        _format_optional(summary.get("population_stddev_distance")),
+        help=(
+            "Population standard deviation across displayed pair distances; smaller means "
+            "the distances are more consistent."
+        ),
     )
     st.caption(
-        f"Method: {summary.get('distance_method', 'unavailable')}; status: "
-        f"{summary.get('computation_status', 'unavailable')}. Every view describes the "
-        "displayed exact or deterministic sample, not uncalculated full-group pairs."
+        "Every view below describes the exact displayed matrix or deterministic bounded "
+        "sample—not uncalculated pairs from omitted proteins."
     )
+    with st.expander("Distance calculation details", expanded=False):
+        st.code(
+            f"method={summary.get('distance_method', 'unavailable')}\n"
+            f"status={summary.get('computation_status', 'unavailable')}\n"
+            f"analysed_proteins={summary.get('sampled_member_count', 'unavailable')}\n"
+            f"full_group_proteins={summary.get('total_member_count', 'unavailable')}",
+            language=None,
+        )
     medoid = _required_mapping(entry=entry, key="medoid")
     if medoid.get("member_id"):
         st.caption(
@@ -704,19 +903,33 @@ def _render_pcoa(*, entry: dict[str, Any], linked: frozenset[str]) -> None:
         st.warning(f"PCoA unavailable: {projection.get('reason', projection.get('status'))}")
         return
     diagnostics = st.columns(5)
-    diagnostics[0].metric("Fit category", str(projection.get("quality_category", "")))
+    diagnostics[0].metric(
+        "2D fit guidance",
+        str(projection.get("quality_category", "")),
+        help="Conservative display guidance, not a biological pass/fail classification.",
+    )
     diagnostics[1].metric(
-        "Axes 1+2 positive inertia",
+        "Variation shown in 2D",
         _format_percent(projection.get("two_axis_positive_inertia_fraction")),
+        help="Fraction of positive PCoA inertia retained by axes 1 and 2.",
     )
     diagnostics[2].metric(
-        "Distance correlation", _format_optional(projection.get("distance_correlation"))
+        "2D distance agreement",
+        _format_optional(projection.get("distance_correlation")),
+        help="Pearson correlation between exact and plotted pair distances; nearer 1 is better.",
     )
     diagnostics[3].metric(
-        "Normalised stress", _format_optional(projection.get("normalised_stress"))
+        "2D distortion (stress)",
+        _format_optional(projection.get("normalised_stress")),
+        help="Normalised distortion between exact and plotted pair distances; lower is better.",
     )
     diagnostics[4].metric(
-        "Negative inertia", _format_percent(projection.get("negative_inertia_fraction"))
+        "Non-Euclidean signal",
+        _format_percent(projection.get("negative_inertia_fraction")),
+        help=(
+            "Absolute negative-inertia fraction. Larger values indicate that the exact "
+            "distance matrix is less faithfully represented by Euclidean coordinates."
+        ),
     )
     category = str(projection.get("quality_category", ""))
     explanation = str(projection.get("quality_explanation", ""))
@@ -742,6 +955,10 @@ def _render_shepard(*, entry: dict[str, Any]) -> None:
     except InputValidationError as error:
         st.warning(str(error))
         return
+    st.write(
+        "Points close to the diagonal have similar exact and plotted distances. Broad "
+        "scatter or systematic curvature reveals where the PCoA view distorts them."
+    )
     st.plotly_chart(figure, width="stretch", config={"displaylogo": False})
     st.caption(
         f"Deterministic {int(projection.get('shepard_point_count', 0)):,}-point summary "
@@ -753,7 +970,15 @@ def _render_phylogram(*, entry: dict[str, Any], linked: frozenset[str]) -> None:
     """Render the pruned branch-length gene-tree view."""
 
     tree = _required_mapping(entry=entry, key="phylogram")
-    show_labels = st.checkbox("Show every displayed leaf label", value=False)
+    st.write(
+        "This pruned gene tree retains horizontal branch lengths for the analysed proteins. "
+        "Use it to test whether patterns in PCoA or the network follow tree structure."
+    )
+    show_labels = st.checkbox(
+        "Show every protein label",
+        value=False,
+        help="Hover labels remain available when dense permanent labels are hidden.",
+    )
     try:
         figure = phylogram_figure(
             entry=entry,
@@ -779,10 +1004,15 @@ def _render_phylogram(*, entry: dict[str, Any], linked: frozenset[str]) -> None:
 def _render_matrix(*, entry: dict[str, Any], linked: frozenset[str]) -> None:
     """Render the exact matrix with optional linked-selection subsetting."""
 
+    st.write(
+        "Each heatmap cell is one exact pair distance. Use this quantitative view to "
+        "confirm compact blocks, outliers or gaps suggested by the layouts."
+    )
     restrict = st.checkbox(
         "Restrict the matrix to the linked selection",
         value=bool(len(linked) >= 2),
         disabled=len(linked) < 2,
+        help="Select at least two linked proteins or species above to enable this subset.",
     )
     selected = tuple(sorted(linked)) if restrict else ()
     try:
@@ -804,6 +1034,10 @@ def _render_topology(
 ) -> None:
     """Render a static nearest-neighbour topology fallback."""
 
+    st.write(
+        "This static view preserves nearest-neighbour connections but not quantitative "
+        "screen distance. It is an alternative to the draggable network above."
+    )
     try:
         figure = nearest_neighbour_figure(
             entry=entry,
@@ -828,7 +1062,16 @@ def _render_selected_members(
     visible = tuple(
         row for row in members if not linked or str(row["member_id"]) in linked
     )
-    st.dataframe(visible, width="stretch", hide_index=True)
+    st.write(
+        "These are the proteins represented in the displayed distance analysis. Linked "
+        "selection above can restrict this table without changing the full group."
+    )
+    st.dataframe(
+        tuple(_display_member_row(row=row) for row in visible),
+        width="stretch",
+        hide_index=True,
+        column_config=_column_config(descriptions=_MEMBER_HELP),
+    )
     st.download_button(
         "Download displayed member selection as TSV",
         data=records_to_tsv(records=visible),
@@ -853,6 +1096,72 @@ def _members(*, entry: dict[str, Any]) -> tuple[dict[str, str], ...]:
             raise InputValidationError("Visual entry contains an unlabelled member row.")
         rows.append({"member_id": member_id, "species_label": species})
     return tuple(rows)
+
+
+def _display_member_dispersion_row(*, row: Mapping[str, Any]) -> dict[str, Any]:
+    """Return readable per-protein distance-summary headings."""
+
+    return {
+        "Protein ID": row["member_id"],
+        "Species": row["species_label"],
+        "Average distance to all others": row["mean_distance"],
+        "Median distance to all others": row["median_distance"],
+        "Distance spread (SD)": row["population_stddev_distance"],
+        "Nearest protein": row["nearest_member_id"],
+        "Nearest protein's species": row["nearest_species_label"],
+        "Nearest distance": row["nearest_distance"],
+        "Sample medoid": "Yes" if row.get("is_sample_medoid") else "No",
+    }
+
+
+def _display_species_dispersion_row(*, row: Mapping[str, Any]) -> dict[str, Any]:
+    """Return readable species-pair distance-summary headings."""
+
+    return {
+        "Species A": row["species_a"],
+        "Species B": row["species_b"],
+        "Pair class": row["pair_class"],
+        "Protein pairs": row["pair_count"],
+        "Average pair distance": row["mean_distance"],
+        "Median pair distance": row["median_distance"],
+        "Distance spread (SD)": row["population_stddev_distance"],
+        "Smallest pair distance": row["minimum_distance"],
+        "Largest pair distance": row["maximum_distance"],
+    }
+
+
+def _display_pair_distance_row(*, row: Mapping[str, Any]) -> dict[str, Any]:
+    """Return readable pair-distance headings while retaining optional site fields."""
+
+    return {
+        "Protein A": row["member_a"],
+        "Species A": row["species_a"],
+        "Protein B": row["member_b"],
+        "Species B": row["species_b"],
+        "Pair distance": row["distance"],
+        "Distance method": row.get("distance_method") or "Unavailable",
+        "Calculation scope": row.get("computation_status") or "Unavailable",
+        "Comparable sites": row.get("comparable_sites"),
+        "Mismatch sites": row.get("mismatch_sites"),
+    }
+
+
+def _display_member_row(*, row: Mapping[str, Any]) -> dict[str, Any]:
+    """Return concise readable fields for one analysed protein."""
+
+    return {
+        "Protein ID": row["member_id"],
+        "Species": row["species_label"],
+    }
+
+
+def _column_config(*, descriptions: Mapping[str, str]) -> dict[str, Any]:
+    """Return Streamlit column definitions with hoverable help descriptions."""
+
+    return {
+        label: st.column_config.Column(label=label, help=description)
+        for label, description in descriptions.items()
+    }
 
 
 def _required_mapping(*, entry: Mapping[str, Any], key: str) -> dict[str, Any]:

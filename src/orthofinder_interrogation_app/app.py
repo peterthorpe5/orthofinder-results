@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import streamlit as st
 
@@ -45,23 +45,86 @@ _PAGES = (
     "Offline report",
     "Help",
 )
+_PAGE_LABELS = {
+    "Overview": "Summary",
+    "Find groups": "Find groups",
+    "Cluster explorer": "Explore one cluster",
+    "Compare clusters": "Compare clusters",
+    "Taxonomic search": "Taxonomic search",
+    "Offline report": "Download report",
+    "Help": "Help & glossary",
+}
 _INCLUDE_LABEL_TO_MODE = {
-    "Any selected species": "ANY",
+    "At least one selected species": "ANY",
     "Every selected species": "ALL",
-    "Exactly this species set": "EXACT_SET",
+    "Exactly the selected species set": "EXACT_SET",
 }
 _DISTANCE_LABEL_TO_MODE = {
-    "Any persisted distance state": "ANY",
-    "Persisted distances available": "CALCULATED",
-    "No persisted distances": "NOT_CALCULATED",
+    "Any stored-distance state": "ANY",
+    "Stored distances available": "CALCULATED",
+    "No stored distances": "NOT_CALCULATED",
 }
 _SORT_LABEL_TO_MODE = {
     "Group identifier": "GROUP_ID_ASC",
     "Largest groups": "MEMBER_COUNT_DESC",
     "Broadest species representation": "SPECIES_COUNT_DESC",
-    "Most compact persisted mean": "MEAN_DISTANCE_ASC",
-    "Most divergent persisted mean": "MEAN_DISTANCE_DESC",
-    "Lowest persisted distance variability": "DISTANCE_SD_ASC",
+    "Smallest stored mean distance": "MEAN_DISTANCE_ASC",
+    "Largest stored mean distance": "MEAN_DISTANCE_DESC",
+    "Smallest stored distance spread": "DISTANCE_SD_ASC",
+}
+_AUTHORITY_COLUMN_HELP = {
+    "Group system": (
+        "HOG means a hierarchical orthogroup at one species-tree level; "
+        "LEGACY_ORTHOGROUP is the flat Orthogroups.tsv collection."
+    ),
+    "Species-tree level": (
+        "The OrthoFinder node at which HOG membership is defined. ROOT is used for "
+        "a flat legacy orthogroup collection."
+    ),
+    "Number of groups": "Number of group records in this exact system and hierarchy level.",
+    "Smallest group (proteins)": "Fewest protein members in any group in this collection.",
+    "Typical group (proteins)": "Median protein-member count across this collection.",
+    "Largest group (proteins)": "Greatest protein-member count in this collection.",
+    "Average species per group": "Mean number of represented species per group.",
+    "Most species in one group": "Largest represented-species count in one group.",
+}
+_GROUP_COLUMN_HELP = {
+    "Group system": _AUTHORITY_COLUMN_HELP["Group system"],
+    "Species-tree level": _AUTHORITY_COLUMN_HELP["Species-tree level"],
+    "Group ID": "Exact OrthoFinder group identifier within the stated system and level.",
+    "Proteins in group": "Complete membership count for this group record.",
+    "Species represented": "Number of sampled species contributing at least one protein.",
+    "Highest copies in one species": "Largest protein copy count observed for one species.",
+    "Average copies per represented species": (
+        "Protein count divided by represented species; species absent from the group are "
+        "not included in this mean."
+    ),
+    "Stored distance coverage": (
+        "Whether a complete or deterministic bounded pair-distance matrix is already "
+        "stored for this group. Not calculated does not mean zero distance."
+    ),
+    "Stored mean pair distance": "Mean across the stored pair-distance matrix, when present.",
+    "Stored distance spread (SD)": (
+        "Population standard deviation across stored pair distances; a smaller value "
+        "means the displayed proteins have more similar pairwise distances."
+    ),
+}
+_SPECIES_COLUMN_HELP = {
+    "Species": "Exact species label recorded by OrthoFinder for this run.",
+    "Proteins from species": "Number of group members contributed by this species.",
+    "Share of group": "Fraction of all proteins in this group contributed by this species.",
+}
+_MEMBER_COLUMN_HELP = {
+    "Species": "Exact OrthoFinder species label for this protein.",
+    "Protein ID": "Exact protein or sequence identifier stored in the group membership.",
+    "Parent legacy orthogroup": "Linked flat orthogroup identifier when OrthoFinder supplied it.",
+    "Gene-tree parent clade": "OrthoFinder gene-tree clade used to define the HOG when present.",
+}
+_DISTANCE_STATUS_LABELS = {
+    "COMPLETE": "Complete distances stored",
+    "EXACT": "Complete distances stored",
+    "DETERMINISTIC_MEMBER_SAMPLE": "Sampled distances stored",
+    "PORTABLE_TREE_LAZY": "Calculated on demand from portable tree",
 }
 
 
@@ -82,16 +145,26 @@ def main() -> None:
     )
     default_resource = os.environ.get(RESOURCE_ENVIRONMENT_VARIABLE, "")
     resource_text = st.sidebar.text_input(
-        "Resource directory or DuckDB",
+        "Data resource",
         value=default_resource,
-        help="Choose a completed resource directory or its DuckDB file.",
+        help=(
+            "Choose a completed orthofinder-results directory or its "
+            "duckdb/orthofinder_results.duckdb file. The app opens it read-only."
+        ),
+        placeholder="Completed resource directory or DuckDB file",
     )
-    page_name = st.sidebar.radio("Page", _PAGES, key="app_page")
+    page_name = st.sidebar.radio(
+        "Go to",
+        _PAGES,
+        key="app_page",
+        format_func=lambda value: _PAGE_LABELS[value],
+        help="Start at Summary, then move from finding groups to exploring and comparing them.",
+    )
     default_cache = os.environ.get(
         CACHE_ENVIRONMENT_VARIABLE,
         str(default_cache_directory()),
     )
-    with st.sidebar.expander("Local sidecars and logs"):
+    with st.sidebar.expander("Advanced: cache, taxonomy & logs"):
         cache_text = st.text_input(
             "Analysis cache directory",
             value=default_cache,
@@ -102,7 +175,7 @@ def main() -> None:
             value=os.environ.get(TAXONOMY_ENVIRONMENT_VARIABLE, ""),
             help="Optional versioned sidecar; mappings are never guessed.",
         )
-    st.sidebar.caption(f"Application package {__version__}")
+    st.sidebar.caption(f"Viewer version {__version__}")
     if not resource_text.strip():
         st.info("Provide a completed resource path in the sidebar to begin.")
         return
@@ -142,7 +215,7 @@ def main() -> None:
 
 
 def _inject_style() -> None:
-    """Apply a restrained readable width and compact metric styling."""
+    """Apply readable widths, metric styling and accessible navigation text."""
 
     st.markdown(
         """
@@ -155,6 +228,18 @@ def _inject_style() -> None:
           background: #fbfdff;
         }
         [data-testid="stSidebar"] {min-width: 19rem;}
+        [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p {
+          font-size: 1rem !important;
+          font-weight: 650 !important;
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] label p {
+          font-size: 1.075rem !important;
+          line-height: 1.45rem !important;
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] label {
+          padding-top: 0.12rem;
+          padding-bottom: 0.12rem;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -173,11 +258,31 @@ def _render_resource_identity(*, resource: Any) -> None:
 
     with st.expander("Resource identity", expanded=False):
         columns = st.columns(5)
-        columns[0].metric("Run", resource.run_id)
-        columns[1].metric("OrthoFinder", resource.orthofinder_version)
-        columns[2].metric("Adapter", resource.adapter_name)
-        columns[3].metric("Resource schema", resource.schema_version)
-        columns[4].metric("Resource package", resource.resource_package_version)
+        columns[0].metric(
+            "Run",
+            resource.run_id,
+            help="The immutable identifier for this completed OrthoFinder analysis.",
+        )
+        columns[1].metric(
+            "OrthoFinder version",
+            resource.orthofinder_version,
+            help="The OrthoFinder version recorded when this analysis was created.",
+        )
+        columns[2].metric(
+            "Input layout",
+            resource.adapter_name,
+            help="The version-specific parser used to read the OrthoFinder directory.",
+        )
+        columns[3].metric(
+            "Data schema",
+            resource.schema_version,
+            help="The version of the portable orthofinder-results data contract.",
+        )
+        columns[4].metric(
+            "Built by package",
+            resource.resource_package_version,
+            help="The orthofinder-results version that built this immutable resource.",
+        )
         st.code(str(resource.database_path), language=None)
         st.caption(
             "Resource package is the version that built this database; application package "
@@ -186,16 +291,49 @@ def _render_resource_identity(*, resource: Any) -> None:
 
 
 def _render_overview(*, service: OrthoFinderQueryService) -> None:
-    """Render an actionable run summary instead of raw metadata."""
+    """Render a guided landing page before exposing technical detail."""
 
-    st.header("Run overview")
+    st.header("Dataset summary")
+    st.write(
+        "This page is the starting point. It describes what is in the completed run, "
+        "what can be analysed now, and which page to use for each biological question."
+    )
     counts = service.overview_counts()
+    authorities = tuple(
+        _display_authority_row(row=row) for row in service.overview_authorities()
+    )
     columns = st.columns(5)
-    columns[0].metric("Groups", f"{counts['group_count']:,}")
-    columns[1].metric("Species", f"{counts['species_count']:,}")
-    columns[2].metric("Group/species rows", f"{counts['group_species_statistic_count']:,}")
-    columns[3].metric("Precomputed distance groups", f"{counts['distance_group_count']:,}")
-    columns[4].metric("Portable gene trees", f"{counts['portable_tree_count']:,}")
+    columns[0].metric(
+        "Group records",
+        f"{counts['group_count']:,}",
+        help=(
+            "All retained HOG records across every hierarchy level, plus legacy "
+            "orthogroups when present. This is not a count of unique root families."
+        ),
+    )
+    columns[1].metric(
+        "Species in this run",
+        f"{counts['species_count']:,}",
+        help="Exact species labels present in this OrthoFinder analysis.",
+    )
+    columns[2].metric(
+        "Group collections",
+        f"{len(authorities):,}",
+        help="Distinct combinations of group system and species-tree hierarchy level.",
+    )
+    columns[3].metric(
+        "Groups with stored distances",
+        f"{counts['distance_group_count']:,}",
+        help="Groups that already contain at least one persisted pairwise-distance result.",
+    )
+    columns[4].metric(
+        "Portable gene trees",
+        f"{counts['portable_tree_count']:,}",
+        help=(
+            "Checksum-bound gene trees available for bounded on-demand distance "
+            "calculation. Schema-2 resources normally show zero here."
+        ),
+    )
     if counts["portable_tree_count"]:
         st.success(
             "This schema-3 resource can calculate bounded patristic distances for any group "
@@ -206,25 +344,66 @@ def _render_overview(*, service: OrthoFinderQueryService) -> None:
             "This schema-2 resource preserves its precomputed pilot groups, but other groups "
             "need a schema-3 rebuild before the app can calculate distances on demand."
         )
-    st.subheader("Group authorities")
-    authorities = tuple(_display_authority_row(row=row) for row in service.overview_authorities())
-    st.dataframe(authorities, width="stretch", hide_index=True)
-    actions = st.columns(3)
-    actions[0].subheader("1. Find")
+    st.subheader("Choose your question")
+    actions = st.columns(4)
+    actions[0].markdown("#### Which groups contain my species?")
     actions[0].write(
-        "Filter groups by exact identifiers, included species, inclusive rules, and rejected "
-        "species."
+        "Require one, every, or exactly a set of sampled species, and reject unwanted species."
     )
-    actions[1].subheader("2. Explore")
+    if actions[0].button("Find groups", key="summary_find_groups"):
+        _navigate_to(page="Find groups")
+    actions[1].markdown("#### How compact or dispersed is one group?")
     actions[1].write(
-        "Open a cluster for force topology, 2D/3D PCoA, exact matrices and several dispersion "
-        "views."
+        "Inspect exact distances, distributions, PCoA, a gene-tree phylogram and networks."
     )
-    actions[2].subheader("3. Compare")
+    if actions[1].button("Explore one cluster", key="summary_explore"):
+        _navigate_to(page="Cluster explorer")
+    actions[2].markdown("#### Which groups focus on a lineage?")
     actions[2].write(
-        "Collect 2–12 groups and compare mean, SD, medians, distributions and independent "
-        "PCoA panels."
+        "Search reviewed taxonomic descendants using contains, enrichment or exclusivity."
     )
+    if actions[2].button("Search taxonomy", key="summary_taxonomy"):
+        _navigate_to(page="Taxonomic search")
+    actions[3].markdown("#### How do candidate groups differ?")
+    actions[3].write(
+        "Collect 2–12 groups and compare distance spread, compactness and PCoA shape."
+    )
+    if actions[3].button("Compare clusters", key="summary_compare"):
+        _navigate_to(page="Compare clusters")
+
+    with st.expander("Detailed group collections and hierarchy levels", expanded=False):
+        st.write(
+            "A HOG can appear at several species-tree levels. Rows below describe each "
+            "retained group collection separately; they should not be summed as unique "
+            "biological families."
+        )
+        st.dataframe(
+            authorities,
+            width="stretch",
+            hide_index=True,
+            column_config=_column_config(descriptions=_AUTHORITY_COLUMN_HELP),
+        )
+        st.caption(
+            f"The database also contains {counts['group_species_statistic_count']:,} "
+            "group-by-species copy-count rows used by species and taxonomy filters."
+        )
+
+    with st.expander("Scope of this standalone app and the wider E3 workflow"):
+        st.markdown(
+            """
+            **Available here:** generic OrthoFinder group discovery, species and copy-number
+            profiles, reviewed taxonomic searches, bounded tree distances, compactness and
+            dispersion views, gene-tree inspection, and comparison within one run.
+
+            **Planned generic extensions:** explicit nested-HOG and split/merge interrogation,
+            followed by comparisons between independently versioned OrthoFinder runs.
+
+            **Kept in the separate E3 application:** E3-ligase prioritisation, expression,
+            experimental evidence, structures, ligandable-pocket conservation and chemistry
+            starting points. The two applications can later exchange versioned group links
+            without putting E3-specific assumptions into this reusable backend.
+            """
+        )
 
 
 def _render_group_search(*, service: OrthoFinderQueryService) -> None:
@@ -232,54 +411,96 @@ def _render_group_search(*, service: OrthoFinderQueryService) -> None:
 
     st.header("Find groups")
     st.caption(
-        "Species controls use exact labels from this run. Required species can use ANY, ALL "
-        "or EXACT-SET semantics; rejected species exclude a group if any selected label occurs."
+        "Start with species or an identifier; open Advanced filters only when needed. "
+        "Required species and rejected species use the exact labels in this dataset."
     )
+    with st.expander("How species inclusion works", expanded=False):
+        st.markdown(
+            """
+            - **At least one selected species** keeps a group containing any selected label.
+            - **Every selected species** requires all selected labels but allows other species.
+            - **Exactly the selected species set** allows no additional sampled species.
+            - **Reject groups containing** removes a group if any rejected label is present.
+            """
+        )
     species = service.list_species()
     group_types = service.list_group_types()
     with st.form("group_filters"):
         first_row = st.columns(4)
-        group_type = first_row[0].selectbox("Group type", ("Any", *group_types))
+        group_type = first_row[0].selectbox(
+            "Group system",
+            ("Any", *group_types),
+            help=_AUTHORITY_COLUMN_HELP["Group system"],
+        )
         nodes = service.list_hierarchy_nodes(
             group_type="" if group_type == "Any" else group_type
         )
         node_labels = tuple("ROOT" if not node else node for node in nodes)
-        hierarchy_label = first_row[1].selectbox("Hierarchy node", ("Any", *node_labels))
-        group_text = first_row[2].text_input("Group identifier contains")
-        member_text = first_row[3].text_input("Member identifier contains")
+        hierarchy_label = first_row[1].selectbox(
+            "Species-tree level",
+            ("Any", *node_labels),
+            help=_AUTHORITY_COLUMN_HELP["Species-tree level"],
+        )
+        group_text = first_row[2].text_input(
+            "Group ID contains",
+            help="Literal, case-insensitive text within the OrthoFinder group identifier.",
+        )
+        member_text = first_row[3].text_input(
+            "Protein ID contains",
+            help="Literal, case-insensitive text within any member identifier.",
+        )
         species_row = st.columns((3, 2, 3))
         included_species = tuple(
-            species_row[0].multiselect("Species to include", options=species)
+            species_row[0].multiselect(
+                "Required species",
+                options=species,
+                help="Select sampled species that a matching group must contain.",
+            )
         )
         include_label = species_row[1].selectbox(
             "Inclusion rule",
             tuple(_INCLUDE_LABEL_TO_MODE),
             index=1,
+            help="Controls how the required-species selection is interpreted.",
         )
         excluded_species = tuple(
-            species_row[2].multiselect("Reject groups containing", options=species)
+            species_row[2].multiselect(
+                "Reject groups containing",
+                options=species,
+                help="Any occurrence of a selected species excludes the whole group.",
+            )
         )
         with st.expander("Advanced size, distance, sorting and paging filters"):
             size_row = st.columns(4)
             minimum_members = int(
-                size_row[0].number_input("Minimum members", min_value=1, value=1)
+                size_row[0].number_input(
+                    "Minimum proteins in group",
+                    min_value=1,
+                    value=1,
+                    help="Complete group-member count, not the displayed distance sample.",
+                )
             )
-            maximum_members_enabled = size_row[1].checkbox("Set maximum members")
+            maximum_members_enabled = size_row[1].checkbox("Set maximum group size")
             maximum_members = int(
                 size_row[1].number_input(
-                    "Maximum members",
+                    "Maximum proteins in group",
                     min_value=1,
                     value=max(minimum_members, 1000),
                     disabled=not maximum_members_enabled,
                 )
             )
             minimum_species = int(
-                size_row[2].number_input("Minimum represented species", min_value=1, value=1)
+                size_row[2].number_input(
+                    "Minimum species represented",
+                    min_value=1,
+                    value=1,
+                    help="Species must contribute at least one protein to count as represented.",
+                )
             )
-            maximum_species_enabled = size_row[3].checkbox("Set maximum species")
+            maximum_species_enabled = size_row[3].checkbox("Set maximum species breadth")
             maximum_species = int(
                 size_row[3].number_input(
-                    "Maximum represented species",
+                    "Maximum species represented",
                     min_value=1,
                     value=max(minimum_species, len(species)),
                     disabled=not maximum_species_enabled,
@@ -287,22 +508,26 @@ def _render_group_search(*, service: OrthoFinderQueryService) -> None:
             )
             distance_row = st.columns(4)
             distance_label = distance_row[0].selectbox(
-                "Persisted distance availability",
+                "Stored distance availability",
                 tuple(_DISTANCE_LABEL_TO_MODE),
+                help=(
+                    "Filters only matrices already stored in this resource. Schema-3 "
+                    "on-demand capability is not precomputed for every group."
+                ),
             )
-            mean_filter_enabled = distance_row[1].checkbox("Limit persisted mean")
+            mean_filter_enabled = distance_row[1].checkbox("Limit stored mean distance")
             maximum_mean_distance = float(
                 distance_row[1].number_input(
-                    "Maximum mean distance",
+                    "Maximum stored mean distance",
                     min_value=0.0,
                     value=1.0,
                     disabled=not mean_filter_enabled,
                 )
             )
-            sd_filter_enabled = distance_row[2].checkbox("Limit persisted SD")
+            sd_filter_enabled = distance_row[2].checkbox("Limit stored distance spread")
             maximum_distance_sd = float(
                 distance_row[2].number_input(
-                    "Maximum distance SD",
+                    "Maximum stored distance SD",
                     min_value=0.0,
                     value=1.0,
                     disabled=not sd_filter_enabled,
@@ -353,6 +578,7 @@ def _render_group_search(*, service: OrthoFinderQueryService) -> None:
         tuple(_display_group_row(row=row) for row in result.rows),
         width="stretch",
         hide_index=True,
+        column_config=_column_config(descriptions=_GROUP_COLUMN_HELP),
     )
     st.download_button(
         "Download this result page as TSV",
@@ -367,7 +593,7 @@ def _render_group_search(*, service: OrthoFinderQueryService) -> None:
     selected_label = st.selectbox("Selected matching group", tuple(labels_to_keys))
     selected_key = labels_to_keys[selected_label]
     actions = st.columns(2)
-    if actions[0].button("Open selected group in Cluster explorer", type="primary"):
+    if actions[0].button("Explore selected cluster", type="primary"):
         _store_active_group(key=selected_key)
         st.session_state["app_page"] = "Cluster explorer"
         st.rerun()
@@ -388,27 +614,60 @@ def _render_group_detail(*, service: OrthoFinderQueryService, key: GroupKey) -> 
     group = service.get_group(key=key)
     st.subheader(key.display_label())
     columns = st.columns(4)
-    columns[0].metric("Members", f"{group['member_count']:,}")
-    columns[1].metric("Species", f"{group['species_count']:,}")
-    columns[2].metric("Maximum copies/species", f"{group['max_copies_per_species']:,}")
-    columns[3].metric("Mean copies/species", _format_number(group["mean_copies_per_species"]))
+    columns[0].metric(
+        "Proteins in group",
+        f"{group['member_count']:,}",
+        help=_GROUP_COLUMN_HELP["Proteins in group"],
+    )
+    columns[1].metric(
+        "Species represented",
+        f"{group['species_count']:,}",
+        help=_GROUP_COLUMN_HELP["Species represented"],
+    )
+    columns[2].metric(
+        "Highest copies in one species",
+        f"{group['max_copies_per_species']:,}",
+        help=_GROUP_COLUMN_HELP["Highest copies in one species"],
+    )
+    columns[3].metric(
+        "Average copies per represented species",
+        _format_number(group["mean_copies_per_species"]),
+        help=_GROUP_COLUMN_HELP["Average copies per represented species"],
+    )
     distance_count = group.get("distance_pair_count")
     if distance_count:
         distance_columns = st.columns(4)
-        distance_columns[0].metric("Persisted mean", _format_number(group["mean_distance"]))
+        distance_columns[0].metric(
+            "Stored mean pair distance",
+            _format_number(group["mean_distance"]),
+            help=_GROUP_COLUMN_HELP["Stored mean pair distance"],
+        )
         distance_columns[1].metric(
-            "Persisted SD", _format_number(group["population_stddev_distance"])
+            "Stored distance spread (SD)",
+            _format_number(group["population_stddev_distance"]),
+            help=_GROUP_COLUMN_HELP["Stored distance spread (SD)"],
         )
-        distance_columns[2].metric("Persisted median", _format_number(group["median_distance"]))
-        distance_columns[3].metric("Persisted pairs", f"{distance_count:,}")
-        st.caption(
-            f"Method: {group['distance_method']}; status: {group['computation_status']}; "
-            f"sampled members: {group['sampled_member_count']:,} of "
-            f"{group['total_member_count']:,}."
+        distance_columns[2].metric(
+            "Stored median pair distance",
+            _format_number(group["median_distance"]),
+            help="Middle pair distance in the stored matrix.",
         )
+        distance_columns[3].metric(
+            "Protein pairs compared",
+            f"{distance_count:,}",
+            help="Number of pairwise comparisons in the stored matrix.",
+        )
+        with st.expander("Technical distance provenance"):
+            st.code(
+                f"method={group['distance_method']}\n"
+                f"status={group['computation_status']}\n"
+                f"sampled_members={group['sampled_member_count']}\n"
+                f"total_members={group['total_member_count']}",
+                language=None,
+            )
     elif service.has_relation(relation="tree_payloads"):
         st.info(
-            "No distance pairs were precomputed for this group. Cluster explorer can try a "
+            "No distance pairs were precomputed for this group. Explore one cluster can try a "
             "bounded on-demand calculation from its portable gene tree."
         )
     else:
@@ -418,9 +677,14 @@ def _render_group_detail(*, service: OrthoFinderQueryService, key: GroupKey) -> 
         )
     species_rows = service.get_group_species(key=key)
     member_rows = service.get_group_members(key=key)
-    species_tab, member_tab = st.tabs(("Species copy counts", "Members"))
+    species_tab, member_tab = st.tabs(("Species copy counts", "Protein members"))
     with species_tab:
-        st.dataframe(species_rows, width="stretch", hide_index=True)
+        st.dataframe(
+            tuple(_display_species_row(row=row) for row in species_rows),
+            width="stretch",
+            hide_index=True,
+            column_config=_column_config(descriptions=_SPECIES_COLUMN_HELP),
+        )
         st.download_button(
             "Download species copy counts as TSV",
             data=records_to_tsv(records=species_rows),
@@ -428,7 +692,12 @@ def _render_group_detail(*, service: OrthoFinderQueryService, key: GroupKey) -> 
             mime="text/tab-separated-values",
         )
     with member_tab:
-        st.dataframe(member_rows, width="stretch", hide_index=True)
+        st.dataframe(
+            tuple(_display_member_row(row=row) for row in member_rows),
+            width="stretch",
+            hide_index=True,
+            column_config=_column_config(descriptions=_MEMBER_COLUMN_HELP),
+        )
         if len(member_rows) == group["member_count"]:
             st.download_button(
                 "Download complete membership as TSV",
@@ -447,7 +716,7 @@ def _render_group_detail(*, service: OrthoFinderQueryService, key: GroupKey) -> 
 def _render_offline_report(*, resource: Any) -> None:
     """Expose the immutable offline report as a download."""
 
-    st.header("Offline report")
+    st.header("Download the offline report")
     if resource.report_path is None:
         st.warning("This resource does not contain an offline HTML report.")
         return
@@ -464,65 +733,187 @@ def _render_offline_report(*, resource: Any) -> None:
 
 
 def _render_help() -> None:
-    """Explain search semantics and conservative scientific interpretation."""
+    """Render task-oriented help and an expandable scientific glossary."""
 
-    st.header("Help and interpretation")
-    st.markdown(
-        """
-        - **ANY selected species** retains groups containing at least one selected label.
-          **ALL** requires every selected label but allows other species. **EXACT SET**
-          requires precisely the selected sampled species.
-        - **Reject groups containing** removes any group containing at least one rejected
-          exact species label.
-        - Mean, median and SD describe only the stated distance method and displayed exact
-          or deterministic member sample. Missing values are not biological zero.
-        - A schema-3 resource stores checksum-bound portable gene trees, not all possible
-          pair matrices. The app calculates a selected bounded matrix and caches it outside
-          the immutable resource. Schema 2 continues to expose its original pilot matrices.
-        - Taxonomic ancestry uses a separately reviewed mapping. Unmapped, pending and
-          ambiguous labels never become inferred outsiders. **Sampled exclusive** means
-          exclusive only among the species in this analysis, not universal absence.
-        - PCoA and force layouts are diagnostic. PCoA arms are not automatic subfamilies,
-          force-layout spacing is non-quantitative, and nearest-neighbour components are
-          not OrthoFinder splits. Confirm detailed geometry in the exact matrix and
-          branch-length phylogram.
-        - The sample medoid is the displayed member with the lowest mean distance to other
-          displayed members. It is not a reconstructed ancestor or guaranteed full-group
-          centre.
-        """
+    st.header("Help & glossary")
+    st.write(
+        "Look for the **?** beside controls and column headings for help in context. "
+        "The sections below explain the same terms in more detail."
     )
+    with st.expander("Getting started", expanded=True):
+        st.markdown(
+            """
+            1. Open **Summary** to understand the run and its distance capability.
+            2. Use **Find groups** for exact species, identifier, size and copy-number questions.
+            3. Send an interesting result to **Explore one cluster** for distances and trees.
+            4. Add 2–12 groups to **Compare clusters** when the same distance method and
+               sampling scope are scientifically comparable.
+
+            **Taxonomic search** is a separate, stricter workflow because descendant claims
+            require a reviewed species-to-taxonomy mapping.
+            """
+        )
+    with st.expander("Groups, HOGs and species-tree levels"):
+        st.markdown(
+            """
+            - A **legacy orthogroup** is a flat group from `Orthogroups.tsv`.
+            - A **hierarchical orthogroup (HOG)** is defined at a named node of the species
+              tree. The same broad family can therefore have related records at several levels.
+            - **Group records** counts all retained group-and-level records. It is not the
+              number of unique root families.
+            - **Species represented** counts species with at least one protein in a group.
+            - **Average copies per represented species** excludes species absent from that group.
+            """
+        )
+    with st.expander("Required species, exact sets and rejected species"):
+        st.markdown(
+            """
+            - **At least one selected species** retains groups containing any selected label.
+            - **Every selected species** requires all selected labels and allows other species.
+            - **Exactly the selected species set** requires precisely those sampled species.
+            - **Reject groups containing** removes a group if any rejected exact label occurs.
+
+            These filters use literal labels from this run; spelling alone is never treated as
+            evidence of taxonomic ancestry.
+            """
+        )
+    with st.expander("Distances, compactness and sampling"):
+        st.markdown(
+            """
+            - **Pair distance** is the stated distance between two displayed proteins. For
+              tree-based analyses it is the sum of branch lengths joining the two leaves.
+            - **Mean** and **median** describe the centre of all displayed pair distances.
+              Smaller values generally indicate a more compact displayed group under that method.
+            - **Distance spread (population SD)** describes how variable those pair distances
+              are. A group may have a small mean but a broad spread, so inspect both.
+            - **Proteins in full group** is the complete membership count. **Proteins analysed**
+              is the exact or deterministic bounded sample used for the displayed matrix.
+            - Missing distance values mean **not calculated or unavailable**, never zero.
+            - The **sample medoid** is the displayed protein with the lowest mean distance to
+              other displayed proteins. It is not an ancestor or guaranteed full-group centre.
+            """
+        )
+    with st.expander("Networks, PCoA, phylograms and exact matrices"):
+        st.markdown(
+            """
+            - The **interactive network** keeps a few nearest-neighbour edges. Its layout helps
+              exploration, but screen spacing is not a distance scale and components are not
+              automatically OrthoFinder splits.
+            - **PCoA** places proteins in two or three dimensions to approximate all pair
+              distances. Read it with its stress, distance agreement and Shepard diagnostic;
+              apparent arms or gaps are hypotheses, not automatic subfamilies.
+            - The **branch-length phylogram** preserves horizontal gene-tree branch length;
+              vertical spacing is only layout.
+            - The **distance heatmap** and protein-pair table retain the exact displayed
+              quantitative values and should be used to confirm patterns seen in layouts.
+            """
+        )
+    with st.expander("Reviewed taxonomy and exclusivity claims"):
+        st.markdown(
+            """
+            Taxonomic ancestry is accepted only from a separately reviewed mapping generated
+            for the current dataset. Unmapped, pending and ambiguous labels remain explicit and
+            never become inferred descendants or reviewed outsiders.
+
+            **Contains** requires target descendants. **Enriched** tests species presence and
+            reports multiple-testing-corrected q-values. **Exclusive within sampled analysis**
+            means exclusive only among species included in this OrthoFinder run—not universal
+            biological absence. **Near-exclusive** permits only the configured sampled outsiders
+            and unresolved labels, all of which remain listed.
+            """
+        )
+    with st.expander("Resource schemas, caches and provenance"):
+        st.markdown(
+            """
+            Schema 3 stores checksum-bound portable gene trees rather than billions of pair
+            matrices. The app can calculate one bounded matrix when requested and caches it in
+            a user sidecar outside the immutable resource. Schema 2 remains readable but normally
+            exposes distances only for its original pilot groups. Raw method, status, source and
+            cache codes remain available under **Technical analysis details** and in TSV exports.
+            """
+        )
 
 
 def _display_authority_row(*, row: dict[str, Any]) -> dict[str, Any]:
-    """Return concise headings for one overview authority row."""
+    """Return plain-language headings for one overview authority row."""
 
     return {
-        "Group type": row["group_type"],
-        "Hierarchy": row["hierarchy_node"] or "ROOT",
-        "Groups": row["group_count"],
-        "Minimum members": row["minimum_members"],
-        "Median members": row["median_members"],
-        "Maximum members": row["maximum_members"],
-        "Mean represented species": row["mean_species"],
-        "Maximum represented species": row["maximum_species"],
+        "Group system": row["group_type"],
+        "Species-tree level": row["hierarchy_node"] or "ROOT",
+        "Number of groups": row["group_count"],
+        "Smallest group (proteins)": row["minimum_members"],
+        "Typical group (proteins)": row["median_members"],
+        "Largest group (proteins)": row["maximum_members"],
+        "Average species per group": row["mean_species"],
+        "Most species in one group": row["maximum_species"],
     }
 
 
 def _display_group_row(*, row: dict[str, Any]) -> dict[str, Any]:
-    """Return concise user-facing headings for a group-search row."""
+    """Return plain-language headings for a group-search row."""
 
     return {
-        "Group type": row["group_type"],
-        "Hierarchy": row["hierarchy_node"] or "ROOT",
-        "Group": row["group_id"],
-        "Members": row["member_count"],
-        "Species": row["species_count"],
-        "Maximum copies/species": row["max_copies_per_species"],
-        "Mean copies/species": row["mean_copies_per_species"],
-        "Persisted distance status": row["computation_status"] or "Not calculated",
-        "Persisted mean distance": row["mean_distance"],
-        "Persisted distance SD": row["population_stddev_distance"],
+        "Group system": row["group_type"],
+        "Species-tree level": row["hierarchy_node"] or "ROOT",
+        "Group ID": row["group_id"],
+        "Proteins in group": row["member_count"],
+        "Species represented": row["species_count"],
+        "Highest copies in one species": row["max_copies_per_species"],
+        "Average copies per represented species": row["mean_copies_per_species"],
+        "Stored distance coverage": _distance_status_label(
+            value=row.get("computation_status")
+        ),
+        "Stored mean pair distance": row["mean_distance"],
+        "Stored distance spread (SD)": row["population_stddev_distance"],
     }
+
+
+def _display_species_row(*, row: Mapping[str, Any]) -> dict[str, Any]:
+    """Return readable per-species copy-count fields for browser display."""
+
+    return {
+        "Species": row["species_label"],
+        "Proteins from species": row["species_member_count"],
+        "Share of group": row["member_fraction"],
+    }
+
+
+def _display_member_row(*, row: Mapping[str, Any]) -> dict[str, Any]:
+    """Return readable membership fields while hiding repeated composite keys."""
+
+    return {
+        "Species": row["species_label"],
+        "Protein ID": row["member_id"],
+        "Parent legacy orthogroup": row.get("legacy_orthogroup_id") or "Unavailable",
+        "Gene-tree parent clade": row.get("gene_tree_parent_clade") or "Unavailable",
+    }
+
+
+def _distance_status_label(*, value: object) -> str:
+    """Translate a stored computation code without discarding unknown provenance."""
+
+    if value is None or str(value).strip() == "":
+        return "Not calculated"
+    code = str(value)
+    return _DISTANCE_STATUS_LABELS.get(code, code.replace("_", " ").title())
+
+
+def _column_config(*, descriptions: Mapping[str, str]) -> dict[str, Any]:
+    """Return Streamlit column definitions with hoverable help descriptions."""
+
+    return {
+        label: st.column_config.Column(label=label, help=description)
+        for label, description in descriptions.items()
+    }
+
+
+def _navigate_to(*, page: str) -> None:
+    """Set one validated internal page and immediately rerun the application."""
+
+    if page not in _PAGES:
+        raise ValueError(f"Unknown application page: {page}")
+    st.session_state["app_page"] = page
+    st.rerun()
 
 
 def _row_group_key(*, row: dict[str, Any]) -> GroupKey:

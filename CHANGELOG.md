@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+## 0.4.1 - 2026-09-08
+
+- Make Summary the guided opening page, place biological questions and routes
+  before technical group-collection tables, and explain schema-2 versus
+  schema-3 distance capability in plain language.
+- Increase sidebar navigation type and replace navigation, control, metric and
+  tab labels that assumed knowledge of internal implementation terms.
+- Add contextual `?` help to principal controls, summary measures and displayed
+  table headings while preserving stable raw field names in TSV downloads.
+- Translate stored-distance states for display, distinguish complete group size
+  from analysed sample size, and explain mean, median, population SD and sample
+  medoid scope beside the relevant views.
+- Add task-specific guidance to force networks, multi-view distance dispersion,
+  two- and three-dimensional PCoA, Shepard diagnostics, gene-tree phylograms,
+  exact heatmaps, protein-pair tables and cross-cluster comparisons.
+- Replace the dense help page with an expandable getting-started guide and
+  scientific glossary covering HOG hierarchy, species rules, distance sampling,
+  visual interpretation, reviewed taxonomy, exclusivity claims and provenance.
+- State the boundary between this generic standalone app and the separate E3
+  prioritisation workflow, while retaining nested-HOG, split/merge and cross-run
+  comparison as explicit generic development goals.
+- Extend unit and Streamlit end-to-end tests for the new landing page, readable
+  display adapters, navigation, help content and unchanged raw authorities.
+
 ## 0.4.0 - 2026-09-07
 
 - Bump the physical resource contract to schema 3 and publish one compressed,

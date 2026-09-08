@@ -26,6 +26,22 @@ from .queries import OrthoFinderQueryService
 from .tsv import records_to_tsv
 
 _LOGGER = logging.getLogger("orthofinder_interrogation_app.comparison_page")
+_COMPARISON_COLUMN_HELP = {
+    "Cluster": "Composite group identity: group system, species-tree level and group ID.",
+    "Proteins in full group": "Complete group membership before bounded sampling.",
+    "Proteins analysed": "Proteins represented in this exact comparison matrix.",
+    "Protein pairs": "Number of exact pair distances compared.",
+    "Smallest distance": "Minimum exact pair distance in the displayed matrix.",
+    "Lower quartile": "25th percentile of exact pair distances.",
+    "Median distance": "Middle exact pair distance.",
+    "Average distance": "Mean exact pair distance; smaller is generally more compact.",
+    "Upper quartile": "75th percentile of exact pair distances.",
+    "Largest distance": "Maximum exact pair distance.",
+    "Distance spread (SD)": "Population standard deviation of exact pair distances.",
+    "Distance method": "Calculation method used for this matrix.",
+    "Calculation scope": "Whether the matrix is complete or a deterministic sample.",
+    "Analysis source": "Stored resource, embedded pilot report or portable-tree sidecar.",
+}
 
 
 def render_cluster_comparison(
@@ -41,15 +57,27 @@ def render_cluster_comparison(
 
     st.header("Compare clusters")
     st.caption(
-        "Compare compactness and dispersion across 2–12 groups. Each PCoA panel is "
-        "calculated independently; compare within-panel shape and diagnostics, not absolute "
-        "coordinate position or orientation between panels."
+        "Compare compactness and distance spread across 2–12 groups. Start with the summary "
+        "and distributions; use the PCoA panels to compare within-group shape."
     )
+    with st.expander("How to make a defensible comparison"):
+        st.markdown(
+            """
+            - Check **Proteins analysed** and **Calculation scope** before comparing groups of
+              very different sizes.
+            - Compare the mean or median together with **Distance spread (SD)** and the full
+              violin/CDF shape; no single statistic captures multi-scale dispersion.
+            - Each PCoA panel has its own coordinate system. Compare internal shape and fit,
+              never absolute position, angle or orientation between panels.
+            - Raw method, sampling and analysis-source fields remain in the authority table
+              and downloadable TSV.
+            """
+        )
     keys = tuple(key for key in _comparison_keys() if key.run_id == resource.run_id)
     if not keys:
         st.info(
-            "The comparison workspace is empty. Add groups from Find groups, Taxonomic "
-            "search or Cluster explorer."
+            "The comparison workspace is empty. Find a group first, then choose “Add selected "
+            "group to comparison” in Find groups, Taxonomic search or Explore one cluster."
         )
         return
     labels = tuple(key.display_label() for key in keys)
@@ -81,7 +109,7 @@ def render_cluster_comparison(
     controls = st.columns(2)
     max_members = int(
         controls[0].select_slider(
-            "Maximum lazy members per comparison group",
+            "Maximum proteins for each new calculation",
             options=(50, 100, 250, 500),
             value=250,
             help=(
@@ -91,7 +119,13 @@ def render_cluster_comparison(
         )
     )
     nearest_neighbours = int(
-        controls[1].slider("Nearest neighbours for cached payloads", 1, 10, 3)
+        controls[1].slider(
+            "Neighbours retained per protein",
+            1,
+            10,
+            3,
+            help="Stored in the reusable analysis payload for each selected cluster.",
+        )
     )
     provider = DistanceAnalysisProvider(
         service=service,
@@ -130,7 +164,12 @@ def render_cluster_comparison(
         )
         for analysis in analyses
     }
-    distribution_tabs = st.tabs(("Violin distributions", "Empirical CDFs"))
+    st.subheader("Compare complete displayed distance distributions")
+    st.write(
+        "Violin plots reveal distribution shape and central range. Empirical CDFs show the "
+        "fraction of protein pairs at or below each distance."
+    )
+    distribution_tabs = st.tabs(("Violin distributions", "Cumulative distributions"))
     with distribution_tabs[0]:
         st.plotly_chart(
             comparison_distribution_figure(
@@ -168,8 +207,13 @@ def render_cluster_comparison(
             "Panels use consistent species colours but independent coordinate systems. "
             "Arms or gaps are diagnostic patterns, not automatic subfamilies."
         )
-    st.subheader("Comparison authority")
-    st.dataframe(summaries, width="stretch", hide_index=True)
+    st.subheader("Comparison data and provenance")
+    st.dataframe(
+        tuple(_display_comparison_summary_row(row=row) for row in summaries),
+        width="stretch",
+        hide_index=True,
+        column_config=_column_config(descriptions=_COMPARISON_COLUMN_HELP),
+    )
     st.download_button(
         "Download comparison summary as TSV",
         data=records_to_tsv(records=summaries),
@@ -218,3 +262,33 @@ def _comparison_summaries(
         )
     rows.sort(key=lambda row: str(row["label"]))
     return tuple(rows)
+
+
+def _display_comparison_summary_row(*, row: dict[str, Any]) -> dict[str, Any]:
+    """Return readable comparison fields while retaining raw TSV records separately."""
+
+    return {
+        "Cluster": row["label"],
+        "Proteins in full group": row["analytical_members"],
+        "Proteins analysed": row["displayed_members"],
+        "Protein pairs": row["pair_count"],
+        "Smallest distance": row["minimum_distance"],
+        "Lower quartile": row["q25_distance"],
+        "Median distance": row["median_distance"],
+        "Average distance": row["mean_distance"],
+        "Upper quartile": row["q75_distance"],
+        "Largest distance": row["maximum_distance"],
+        "Distance spread (SD)": row["population_stddev_distance"],
+        "Distance method": row["distance_method"],
+        "Calculation scope": row["computation_status"],
+        "Analysis source": row["analysis_source"],
+    }
+
+
+def _column_config(*, descriptions: dict[str, str]) -> dict[str, Any]:
+    """Return Streamlit column definitions with hoverable help descriptions."""
+
+    return {
+        label: st.column_config.Column(label=label, help=description)
+        for label, description in descriptions.items()
+    }

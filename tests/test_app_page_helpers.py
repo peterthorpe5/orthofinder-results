@@ -9,7 +9,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from orthofinder_interrogation_app import evolutionary_page, taxonomy_page
+from orthofinder_interrogation_app import (
+    app,
+    comparison_page,
+    evolutionary_page,
+    taxonomy_page,
+)
 from orthofinder_interrogation_app.distance_data import GroupAnalysis
 from orthofinder_interrogation_app.models import GroupKey
 from orthofinder_interrogation_app.report_data import (
@@ -174,7 +179,138 @@ def test_taxonomy_page_mapping_precedence_and_scope_messages(
         "enrichment_p_value": 0.02,
         "enrichment_q_value": 0.04,
     }
-    assert taxonomy_page._display_taxonomy_row(row=row)["BH q-value"] == 0.04
+    displayed = taxonomy_page._display_taxonomy_row(row=row)
+    assert displayed["Adjusted q-value (BH)"] == 0.04
+    assert displayed["Target descendant coverage"] == 0.5
+
+
+def test_plain_language_application_display_helpers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Landing, group and navigation helpers retain values under readable labels."""
+
+    authority = app._display_authority_row(
+        row={
+            "group_type": "HOG",
+            "hierarchy_node": "N0",
+            "group_count": 2,
+            "minimum_members": 1,
+            "median_members": 3,
+            "maximum_members": 5,
+            "mean_species": 2.5,
+            "maximum_species": 4,
+        }
+    )
+    assert authority["Typical group (proteins)"] == 3
+    group = app._display_group_row(
+        row={
+            "group_type": "HOG",
+            "hierarchy_node": "N0",
+            "group_id": "N0.HOG1",
+            "member_count": 3,
+            "species_count": 2,
+            "max_copies_per_species": 2,
+            "mean_copies_per_species": 1.5,
+            "computation_status": "DETERMINISTIC_MEMBER_SAMPLE",
+            "mean_distance": 0.2,
+            "population_stddev_distance": 0.1,
+        }
+    )
+    assert group["Stored distance coverage"] == "Sampled distances stored"
+    assert app._distance_status_label(value=None) == "Not calculated"
+    assert app._distance_status_label(value="NEW_CODE") == "New Code"
+    assert app._display_species_row(
+        row={"species_label": "A", "species_member_count": 2, "member_fraction": 0.5}
+    )["Proteins from species"] == 2
+    assert app._display_member_row(
+        row={"species_label": "A", "member_id": "a", "legacy_orthogroup_id": ""}
+    )["Parent legacy orthogroup"] == "Unavailable"
+
+    streamlit = MagicMock()
+    streamlit.session_state = {}
+    monkeypatch.setattr(app, "st", streamlit)
+    app._navigate_to(page="Find groups")
+    assert streamlit.session_state["app_page"] == "Find groups"
+    streamlit.rerun.assert_called_once()
+    with pytest.raises(ValueError, match="Unknown application page"):
+        app._navigate_to(page="Unknown")
+
+
+def test_plain_language_evolutionary_display_helpers() -> None:
+    """Evolutionary tables expose clear headings without altering raw calculations."""
+
+    member = evolutionary_page._display_member_dispersion_row(
+        row={
+            "member_id": "a",
+            "species_label": "A",
+            "mean_distance": 0.2,
+            "median_distance": 0.2,
+            "population_stddev_distance": 0.1,
+            "nearest_member_id": "b",
+            "nearest_species_label": "B",
+            "nearest_distance": 0.1,
+            "is_sample_medoid": True,
+        }
+    )
+    assert member["Sample medoid"] == "Yes"
+    species = evolutionary_page._display_species_dispersion_row(
+        row={
+            "species_a": "A",
+            "species_b": "B",
+            "pair_class": "Between species",
+            "pair_count": 2,
+            "mean_distance": 0.2,
+            "median_distance": 0.2,
+            "population_stddev_distance": 0.1,
+            "minimum_distance": 0.1,
+            "maximum_distance": 0.3,
+        }
+    )
+    assert species["Protein pairs"] == 2
+    pair = evolutionary_page._display_pair_distance_row(
+        row={
+            "member_a": "a",
+            "species_a": "A",
+            "member_b": "b",
+            "species_b": "B",
+            "distance": 0.1,
+        }
+    )
+    assert pair["Pair distance"] == 0.1
+    assert pair["Distance method"] == "Unavailable"
+    assert evolutionary_page._display_member_row(
+        row={"member_id": "a", "species_label": "A"}
+    ) == {"Protein ID": "a", "Species": "A"}
+
+
+def test_plain_language_taxonomy_and_comparison_helpers() -> None:
+    """Taxonomy statuses and comparison authority retain explicit provenance."""
+
+    assert taxonomy_page._mapping_status_help(status="REVIEWED").startswith("A person")
+    assert taxonomy_page._mapping_status_help(status="OTHER").startswith("Unrecognised")
+    assert taxonomy_page._distance_status_label(value="") == "Not calculated"
+    assert taxonomy_page._display_species_result_row(
+        row={"species_label": "A", "species_member_count": 2, "member_fraction": 1.0}
+    )["Share of group"] == 1.0
+    raw = {
+        "label": "HOG | N0 | N0.HOG1",
+        "analytical_members": 4,
+        "displayed_members": 3,
+        "pair_count": 3,
+        "minimum_distance": 0.1,
+        "q25_distance": 0.2,
+        "median_distance": 0.3,
+        "mean_distance": 0.4,
+        "q75_distance": 0.5,
+        "maximum_distance": 0.6,
+        "population_stddev_distance": 0.1,
+        "distance_method": "patristic_branch_length",
+        "computation_status": "DETERMINISTIC_MEMBER_SAMPLE",
+        "analysis_source": "PERSISTED_REPORT_MATRIX",
+    }
+    displayed = comparison_page._display_comparison_summary_row(row=raw)
+    assert displayed["Proteins in full group"] == 4
+    assert displayed["Distance spread (SD)"] == 0.1
 
 
 def test_taxonomy_page_invalid_and_unreviewed_mapping_states(

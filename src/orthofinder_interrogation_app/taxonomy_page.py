@@ -33,6 +33,36 @@ _MODE_LABELS = {
     "Exclusive within sampled analysis": "SAMPLED_EXCLUSIVE",
     "Near-exclusive within sampled analysis": "NEAR_EXCLUSIVE",
 }
+_TAXONOMY_COLUMN_HELP = {
+    "Group ID": "Exact OrthoFinder group identifier at the selected hierarchy level.",
+    "Proteins in group": "Complete protein-member count for this group record.",
+    "Species represented": "All sampled species contributing at least one protein.",
+    "Target descendants represented": "Reviewed target-descendant species found in the group.",
+    "Target descendant coverage": (
+        "Represented reviewed target descendants divided by all reviewed target descendants "
+        "sampled in this run."
+    ),
+    "Mapped target purity": (
+        "Represented target descendants divided by all represented REVIEWED species."
+    ),
+    "Reviewed outsiders": "Represented REVIEWED species outside the selected target lineage.",
+    "Outsider species": "Exact labels of represented reviewed outsiders.",
+    "Unresolved species": "Represented labels that are unmapped, ambiguous or awaiting review.",
+    "Stored distance coverage": "Whether this group already has a stored distance matrix.",
+    "Stored mean pair distance": "Mean of stored pair distances when available.",
+    "Stored median pair distance": "Median of stored pair distances when available.",
+    "Stored distance spread (SD)": "Population standard deviation of stored pair distances.",
+    "Enrichment odds ratio": "One-sided species-presence enrichment effect estimate.",
+    "Fisher p-value": "Unadjusted one-sided Fisher exact-test p-value.",
+    "Adjusted q-value (BH)": (
+        "Benjamini–Hochberg-adjusted p-value across every tested group in the selected authority."
+    ),
+}
+_SPECIES_RESULT_HELP = {
+    "Species": "Exact species label represented in the selected group.",
+    "Proteins from species": "Number of group proteins contributed by this species.",
+    "Share of group": "Fraction of the group's proteins contributed by this species.",
+}
 
 
 def render_taxonomy_search(*, service: OrthoFinderQueryService, taxonomy_path_text: str) -> None:
@@ -40,10 +70,23 @@ def render_taxonomy_search(*, service: OrthoFinderQueryService, taxonomy_path_te
 
     st.header("Taxonomic search")
     st.caption(
-        "Descendant logic uses only an explicit reviewed TSV mapping. Workflow labels are "
-        "never interpreted as taxonomy from their spelling. The workflow is generated from "
-        "the current resource species set, so it is not tied to this study's 60 species."
+        "Find groups that contain, favour or are restricted to descendants of a reviewed "
+        "taxon. The mapping is generated from the current dataset and is never fixed to one "
+        "study's species list."
     )
+    with st.expander("What the four taxonomic searches mean", expanded=False):
+        st.markdown(
+            """
+            - **Contains target descendants:** at least the requested number of reviewed target
+              species is represented; outsiders are allowed.
+            - **Enriched in target descendants:** target species occur more often than expected
+              in the selected group collection, with multiple-testing correction.
+            - **Exclusive within sampled analysis:** no reviewed outsider or unresolved sampled
+              label is represented. This is not a universal absence claim.
+            - **Near-exclusive within sampled analysis:** allows only the configured number of
+              outsiders or unresolved sampled labels, all of which remain visible.
+            """
+        )
     species = service.list_species()
     st.download_button(
         "Download taxonomy review template",
@@ -83,22 +126,42 @@ def render_taxonomy_search(*, service: OrthoFinderQueryService, taxonomy_path_te
     group_types = service.list_group_types()
     with st.form("taxonomy_search_filters"):
         first = st.columns(4)
-        taxon_label = first[0].selectbox("Target taxon", tuple(labels_to_taxa))
-        group_type = first[1].selectbox("Group type", group_types)
+        taxon_label = first[0].selectbox(
+            "Target lineage",
+            tuple(labels_to_taxa),
+            help="Reviewed NCBI taxon whose sampled descendants define the target set.",
+        )
+        group_type = first[1].selectbox(
+            "Group system",
+            group_types,
+            help="HOG is hierarchical; LEGACY_ORTHOGROUP is the flat Orthogroups.tsv set.",
+        )
         nodes = service.list_hierarchy_nodes(group_type=group_type)
         hierarchy_node = first[2].selectbox(
-            "Hierarchy node", nodes, format_func=lambda value: value or "ROOT"
+            "Species-tree level",
+            nodes,
+            format_func=lambda value: value or "ROOT",
+            help="Exact species-tree node at which HOG membership is defined.",
         )
-        mode_label = first[3].selectbox("Search mode", tuple(_MODE_LABELS))
+        mode_label = first[3].selectbox(
+            "Search question",
+            tuple(_MODE_LABELS),
+            help="Open the explanation above before interpreting exclusivity or enrichment.",
+        )
         mode = _MODE_LABELS[mode_label]
 
         second = st.columns(3)
         minimum_target = int(
-            second[0].number_input("Minimum represented target species", min_value=1, value=1)
+            second[0].number_input(
+                "Minimum target descendants represented",
+                min_value=1,
+                value=1,
+                help="Minimum number of reviewed sampled target species present in a group.",
+            )
         )
         minimum_coverage = float(
             second[1].number_input(
-                "Minimum target coverage",
+                "Minimum target descendant coverage",
                 min_value=0.0,
                 max_value=1.0,
                 value=0.0,
@@ -120,7 +183,7 @@ def render_taxonomy_search(*, service: OrthoFinderQueryService, taxonomy_path_te
         third = st.columns(4)
         maximum_outside = int(
             third[0].number_input(
-                "Maximum reviewed outsider species",
+                "Maximum reviewed outsiders",
                 min_value=0,
                 value=1,
                 disabled=mode != "NEAR_EXCLUSIVE",
@@ -128,7 +191,7 @@ def render_taxonomy_search(*, service: OrthoFinderQueryService, taxonomy_path_te
         )
         maximum_unresolved = int(
             third[1].number_input(
-                "Maximum unresolved species",
+                "Maximum unresolved labels",
                 min_value=0,
                 value=0,
                 disabled=mode != "NEAR_EXCLUSIVE",
@@ -136,7 +199,7 @@ def render_taxonomy_search(*, service: OrthoFinderQueryService, taxonomy_path_te
         )
         maximum_q = float(
             third[2].number_input(
-                "Maximum BH q-value",
+                "Maximum adjusted q-value (BH)",
                 min_value=0.0,
                 max_value=1.0,
                 value=0.05,
@@ -190,7 +253,12 @@ def render_taxonomy_search(*, service: OrthoFinderQueryService, taxonomy_path_te
         st.warning("No groups match the selected taxonomic criteria.")
         return
     displayed = tuple(_display_taxonomy_row(row=row) for row in result.rows)
-    st.dataframe(displayed, width="stretch", hide_index=True)
+    st.dataframe(
+        displayed,
+        width="stretch",
+        hide_index=True,
+        column_config=_column_config(descriptions=_TAXONOMY_COLUMN_HELP),
+    )
     st.download_button(
         "Download this taxonomic result page as TSV",
         data=records_to_tsv(records=result.rows),
@@ -214,7 +282,7 @@ def render_taxonomy_search(*, service: OrthoFinderQueryService, taxonomy_path_te
     selected_label = st.selectbox("Inspect one taxonomic match", tuple(labels_to_keys))
     key = labels_to_keys[selected_label]
     actions = st.columns(2)
-    if actions[0].button("Open taxonomic match in Cluster explorer", type="primary"):
+    if actions[0].button("Explore selected taxonomic match", type="primary"):
         _store_active_group(key=key)
         st.session_state["app_page"] = "Cluster explorer"
         st.rerun()
@@ -226,7 +294,15 @@ def render_taxonomy_search(*, service: OrthoFinderQueryService, taxonomy_path_te
         _store_comparison_keys(keys=(*basket, key))
         st.success(f"Added to comparison workspace ({len(basket) + 1:,}/12).")
     st.subheader(key.display_label())
-    st.dataframe(service.get_group_species(key=key), width="stretch", hide_index=True)
+    st.dataframe(
+        tuple(
+            _display_species_result_row(row=row)
+            for row in service.get_group_species(key=key)
+        ),
+        width="stretch",
+        hide_index=True,
+        column_config=_column_config(descriptions=_SPECIES_RESULT_HELP),
+    )
 
 
 def _mapping_authority(
@@ -256,7 +332,11 @@ def _render_mapping_audit(*, authority: TaxonomyAuthority) -> None:
         ("REVIEWED", "PENDING_REVIEW", "UNMAPPED", "AMBIGUOUS", "MISSING"),
         strict=True,
     ):
-        column.metric(status.replace("_", " ").title(), f"{counts[status]:,}")
+        column.metric(
+            status.replace("_", " ").title(),
+            f"{counts[status]:,}",
+            help=_mapping_status_help(status=status),
+        )
     audit = taxonomy_audit_rows(authority=authority)
     unresolved = tuple(row for row in audit if row["mapping_status"] != "REVIEWED")
     if unresolved:
@@ -314,29 +394,77 @@ def _render_search_scope(*, mode: str, option: Any, result: Any) -> None:
 
 
 def _display_taxonomy_row(*, row: dict[str, Any]) -> dict[str, Any]:
-    """Return concise headings while retaining outsider identities."""
+    """Return plain-language headings while retaining outsider identities."""
 
     displayed = {
-        "Group": row["group_id"],
-        "Members": row["member_count"],
-        "Species": row["species_count"],
-        "Target species": row["target_species_count"],
-        "Target coverage": row["target_coverage"],
+        "Group ID": row["group_id"],
+        "Proteins in group": row["member_count"],
+        "Species represented": row["species_count"],
+        "Target descendants represented": row["target_species_count"],
+        "Target descendant coverage": row["target_coverage"],
         "Mapped target purity": row["mapped_target_fraction"],
         "Reviewed outsiders": row["outside_species_count"],
         "Outsider species": row["outsider_species_labels"],
         "Unresolved species": row["unresolved_species_labels"],
-        "Persisted distance status": row.get("computation_status") or "Not calculated",
-        "Persisted mean distance": row.get("mean_distance"),
-        "Persisted median distance": row.get("median_distance"),
-        "Persisted distance SD": row.get("population_stddev_distance"),
+        "Stored distance coverage": _distance_status_label(
+            value=row.get("computation_status")
+        ),
+        "Stored mean pair distance": row.get("mean_distance"),
+        "Stored median pair distance": row.get("median_distance"),
+        "Stored distance spread (SD)": row.get("population_stddev_distance"),
     }
     if "enrichment_q_value" in row:
         displayed.update(
             {
                 "Enrichment odds ratio": row["enrichment_odds_ratio"],
                 "Fisher p-value": row["enrichment_p_value"],
-                "BH q-value": row["enrichment_q_value"],
+                "Adjusted q-value (BH)": row["enrichment_q_value"],
             }
         )
     return displayed
+
+
+def _display_species_result_row(*, row: dict[str, Any]) -> dict[str, Any]:
+    """Return readable copy-count fields for one represented species."""
+
+    return {
+        "Species": row["species_label"],
+        "Proteins from species": row["species_member_count"],
+        "Share of group": row["member_fraction"],
+    }
+
+
+def _distance_status_label(*, value: object) -> str:
+    """Return a readable stored-distance status without hiding unknown codes."""
+
+    if value is None or str(value).strip() == "":
+        return "Not calculated"
+    labels = {
+        "COMPLETE": "Complete distances stored",
+        "EXACT": "Complete distances stored",
+        "DETERMINISTIC_MEMBER_SAMPLE": "Sampled distances stored",
+    }
+    code = str(value)
+    return labels.get(code, code.replace("_", " ").title())
+
+
+def _mapping_status_help(*, status: str) -> str:
+    """Return one conservative explanation for a taxonomy mapping status."""
+
+    descriptions = {
+        "REVIEWED": "A person approved the species identity, taxon and lineage.",
+        "PENDING_REVIEW": "A candidate exists but cannot support descendant claims yet.",
+        "UNMAPPED": "No accepted taxon has been assigned.",
+        "AMBIGUOUS": "More than one plausible mapping remains unresolved.",
+        "MISSING": "The reviewed sidecar has no row for an expected dataset label.",
+    }
+    return descriptions.get(status, "Unrecognised status retained from the mapping authority.")
+
+
+def _column_config(*, descriptions: dict[str, str]) -> dict[str, Any]:
+    """Return Streamlit column definitions with hoverable help descriptions."""
+
+    return {
+        label: st.column_config.Column(label=label, help=description)
+        for label, description in descriptions.items()
+    }

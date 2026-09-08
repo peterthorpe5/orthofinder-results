@@ -41,19 +41,23 @@ def test_overview_group_search_and_help_routes(
     )
     assert not test.exception
     assert test.title[0].value == "OrthoFinder Interrogation"
-    assert any(metric.label == "Groups" and metric.value == "4" for metric in test.metric)
+    assert any(
+        metric.label == "Group records" and metric.value == "4" for metric in test.metric
+    )
+    assert any(header.value == "Dataset summary" for header in test.header)
+    assert any("Which groups contain my species?" in item.value for item in test.markdown)
     test.sidebar.radio[0].set_value("Find groups")
     test.run()
     assert not test.exception
     assert any(header.value == "Find groups" for header in test.header)
     assert any("4 matching groups" in caption.value for caption in test.caption)
     assert len(test.dataframe) >= 3
-    assert any(metric.label == "Persisted mean" for metric in test.metric)
+    assert any(metric.label == "Stored mean pair distance" for metric in test.metric)
     test.sidebar.radio[0].set_value("Help")
     test.run()
     assert not test.exception
-    assert any(header.value == "Help and interpretation" for header in test.header)
-    assert any("EXACT SET" in markdown.value for markdown in test.markdown)
+    assert any(header.value == "Help & glossary" for header in test.header)
+    assert any("Exactly the selected species set" in markdown.value for markdown in test.markdown)
 
 
 def test_offline_report_and_invalid_resource_routes(
@@ -68,7 +72,7 @@ def test_offline_report_and_invalid_resource_routes(
     test.sidebar.radio[0].set_value("Offline report")
     test.run()
     assert not test.exception
-    assert any(header.value == "Offline report" for header in test.header)
+    assert any(header.value == "Download the offline report" for header in test.header)
     assert test.button or test.get("download_button")
     test.sidebar.text_input[0].set_value(str(application_resource / "missing"))
     test.run()
@@ -91,7 +95,7 @@ def test_evolutionary_and_reviewed_taxonomy_routes(
     test.sidebar.radio[0].set_value("Cluster explorer")
     test.run()
     assert not test.exception
-    assert any(header.value == "Cluster explorer" for header in test.header)
+    assert any(header.value == "Explore one cluster" for header in test.header)
     assert len(test.get("plotly_chart")) >= 5
 
     test.sidebar.radio[0].set_value("Taxonomic search")
@@ -172,7 +176,10 @@ def test_empty_and_populated_cluster_comparison_routes(
     test.run()
     assert not test.exception
     assert len(test.get("plotly_chart")) >= 4
-    assert any(subheader.value == "Comparison authority" for subheader in test.subheader)
+    assert any(
+        subheader.value == "Comparison data and provenance"
+        for subheader in test.subheader
+    )
 
 
 def test_schema3_pipeline_to_lazy_cluster_explorer_end_to_end(

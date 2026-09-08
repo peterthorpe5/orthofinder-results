@@ -146,7 +146,7 @@ when the package is used only to build resources on a cluster.
 
 ## Interactive application
 
-Version 0.4.0 provides the read-only standalone application. It opens either a
+Version 0.4.1 provides the read-only standalone application. It opens either a
 completed resource directory or its `duckdb/orthofinder_results.duckdb` file:
 
 ```bash
@@ -176,7 +176,8 @@ a completed resource.
 
 The application provides:
 
-- an actionable overview of complete group authorities and schema capabilities;
+- a guided Summary landing page organised around biological questions, with
+  contextual help, readable table headings and an expandable scientific glossary;
 - bounded group/member searches with exact group type and hierarchy;
 - exact stored-species filters with `ANY`, `ALL` and `EXACT_SET` semantics;
 - rejection of every group containing any selected excluded species;
@@ -472,14 +473,22 @@ Open the database with:
 duckdb /path/to/output/duckdb/orthofinder_results.duckdb
 ```
 
-## Scope of version 0.4.0
+## Scope of version 0.4.1
 
-Version 0.4.0 adds the portable-tree/lazy-distance backend, generic taxdump
-candidate workflow, multi-view dispersion explorer and within-run comparison
-workspace to the loss-aware ingestion foundation. It compares several clusters
-from one immutable run; cross-run cluster lineage (stable overlap scores and
-split/merge classification) remains a later, separately tested layer. Keeping
-source runs immutable is what makes that future layer possible and auditable.
+Version 0.4.1 adds a guided Summary page, contextual help, plain-language
+interface labels and a task-oriented glossary to the v0.4 portable-tree,
+taxonomy, dispersion and within-run comparison foundation. The standalone app
+owns generic OrthoFinder interrogation: group membership, copy number, species
+breadth, reviewed taxonomy, distances, compactness, trees and within-run
+comparison. Explicit nested-HOG interrogation and cross-run cluster lineage
+(stable overlap scores plus split/merge classification) remain later,
+separately tested generic layers.
+
+E3-ligase ranking, expression, experimental evidence, structures, conserved
+ligandable pockets and chemistry starting points remain in the separate E3
+application. A later versioned link contract can connect an exact composite
+OrthoFinder group identity to that evidence without building E3-specific
+assumptions into this reusable package.
 
 ## Development quality gate
 
