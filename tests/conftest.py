@@ -176,6 +176,38 @@ def application_resource(tmp_path: Path) -> Path:
             ],
         )
         connection.execute(
+            "CREATE TABLE sequences(run_id VARCHAR, internal_id VARCHAR, "
+            "species_index VARCHAR, species_label VARCHAR, source_fasta VARCHAR, "
+            "raw_header VARCHAR, member_id VARCHAR, source_file VARCHAR, "
+            "source_line BIGINT)"
+        )
+        sequence_rows = (
+            ("0_0", "0", "Species_A", "alpha_1"),
+            ("0_1", "0", "Species_A", "alpha_2"),
+            ("1_0", "1", "Species_B", "beta_1"),
+            ("0_2", "0", "Species_A", "literal%member"),
+            ("2_0", "2", "Species_C", "gamma_1"),
+            ("0_3", "0", "Species_A", "a3"),
+            ("1_1", "1", "Species_B", "b3"),
+            ("2_1", "2", "Species_C", "c3"),
+            ("3_0", "3", "Species_D", "delta_1"),
+        )
+        connection.executemany(
+            "INSERT INTO sequences VALUES ('test_run', ?, ?, ?, ?, ?, ?, "
+            "'SequenceIDs.txt', 1)",
+            [
+                (
+                    internal_id,
+                    species_index,
+                    species_label,
+                    f"{species_label}.fa",
+                    member_id,
+                    member_id,
+                )
+                for internal_id, species_index, species_label, member_id in sequence_rows
+            ],
+        )
+        connection.execute(
             "CREATE TABLE group_statistics(run_id VARCHAR, group_type VARCHAR, "
             "hierarchy_node VARCHAR, group_id VARCHAR, legacy_orthogroup_id VARCHAR, "
             "gene_tree_parent_clade VARCHAR, member_count BIGINT, species_count BIGINT, "

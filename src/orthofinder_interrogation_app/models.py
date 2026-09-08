@@ -21,6 +21,7 @@ SORT_MODES = frozenset(
     }
 )
 TAXONOMY_SEARCH_MODES = frozenset({"CONTAINS", "ENRICHED", "SAMPLED_EXCLUSIVE", "NEAR_EXCLUSIVE"})
+PROTEIN_MATCH_MODES = frozenset({"EXACT", "CONTAINS"})
 
 
 @dataclass(frozen=True)
@@ -192,6 +193,74 @@ class DistanceResultSet:
     rows: tuple[dict[str, Any], ...]
     total_rows: int
     columns: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ProteinSearchFilters:
+    """Validated controls for one protein-to-cluster search.
+
+    Attributes:
+        query: Exact identifier or literal identifier fragment.
+        match_mode: ``EXACT`` or literal case-insensitive ``CONTAINS``.
+        group_type: Optional exact group system.
+        maximum_rows: Maximum matching membership rows returned to the browser.
+    """
+
+    query: str
+    match_mode: str = "EXACT"
+    group_type: str = ""
+    maximum_rows: int = 500
+
+    def __post_init__(self) -> None:
+        """Normalise identifiers and reject ambiguous or expensive requests."""
+
+        if not isinstance(self.query, str):
+            raise InputValidationError("Protein query must be text.")
+        query = self.query.strip()
+        if not query:
+            raise InputValidationError("Enter a protein or internal sequence identifier.")
+        if "\x00" in query or any(ord(character) < 32 for character in query):
+            raise InputValidationError("Protein query contains a control character.")
+        if len(query) > 512:
+            raise InputValidationError("Protein query must not exceed 512 characters.")
+        if self.match_mode not in PROTEIN_MATCH_MODES:
+            raise InputValidationError(f"Unsupported protein match mode: {self.match_mode}")
+        if self.match_mode == "CONTAINS" and len(query) < 3:
+            raise InputValidationError(
+                "A contains search requires at least three literal characters."
+            )
+        if not isinstance(self.group_type, str):
+            raise InputValidationError("Protein group_type must be text.")
+        group_type = self.group_type.strip()
+        if "\x00" in group_type:
+            raise InputValidationError("Protein group_type must not contain NUL characters.")
+        if not isinstance(self.maximum_rows, int) or isinstance(self.maximum_rows, bool):
+            raise InputValidationError("Protein maximum_rows must be an integer.")
+        if not 1 <= self.maximum_rows <= 1_000:
+            raise InputValidationError("Protein maximum_rows must be between 1 and 1,000.")
+        object.__setattr__(self, "query", query)
+        object.__setattr__(self, "group_type", group_type)
+
+
+@dataclass(frozen=True)
+class ProteinSearchPage:
+    """One bounded protein-to-cluster result page.
+
+    Attributes:
+        rows: Matching protein membership and cluster-summary records.
+        total_rows: Complete number of matches before the browser bound.
+        maximum_rows: Applied materialisation limit.
+    """
+
+    rows: tuple[dict[str, Any], ...]
+    total_rows: int
+    maximum_rows: int
+
+    @property
+    def truncated(self) -> bool:
+        """Return whether additional matching rows were deliberately omitted."""
+
+        return self.total_rows > len(self.rows)
 
 
 @dataclass(frozen=True)

@@ -10,9 +10,10 @@ import os
 import sys
 import uuid
 from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from orthofinder_results.distances import (
     calculate_patristic_distances_from_newick,
@@ -101,6 +102,7 @@ class DistanceAnalysisProvider:
         max_members: int = DEFAULT_ANALYSIS_MEMBERS,
         nearest_neighbours: int = DEFAULT_NEAREST_NEIGHBOURS,
         force_recompute: bool = False,
+        required_members: Sequence[str] = (),
     ) -> GroupAnalysis:
         """Return one bounded analysis from the best available authority.
 
@@ -113,6 +115,8 @@ class DistanceAnalysisProvider:
             max_members: Maximum exact or deterministic sampled members.
             nearest_neighbours: Neighbour edges retained per displayed member.
             force_recompute: Ignore a valid sidecar cache entry.
+            required_members: Canonical protein identifiers that must be included
+                in a newly calculated bounded matrix.
 
         Returns:
             Complete linked analysis record.
@@ -124,6 +128,10 @@ class DistanceAnalysisProvider:
         _validate_analysis_controls(
             max_members=max_members,
             nearest_neighbours=nearest_neighbours,
+        )
+        required = _normalise_required_members(
+            values=required_members,
+            max_members=max_members,
         )
         if key.run_id != self.service.resource.run_id:
             raise InputValidationError(
@@ -138,7 +146,15 @@ class DistanceAnalysisProvider:
             and isinstance(report_matrix, dict)
             and report_matrix.get("status") == "EXACT_COMPLETE_DISPLAYED_MATRIX"
         )
-        if self.service.resource.schema_version < 3 and report_is_exact:
+        report_has_required = _report_contains_members(
+            entry=report_entry,
+            required_members=required,
+        )
+        if (
+            self.service.resource.schema_version < 3
+            and report_is_exact
+            and report_has_required
+        ):
             return _analysis_from_report(
                 key=key,
                 group=group,
@@ -151,7 +167,11 @@ class DistanceAnalysisProvider:
             distance_method=method,
             maximum=MAX_GROUP_DISTANCE_ROWS,
         )
-        if persisted:
+        persisted_has_required = _distance_rows_contain_members(
+            rows=persisted,
+            required_members=required,
+        )
+        if persisted and persisted_has_required:
             return self._analysis_from_rows(
                 key=key,
                 group=group,
@@ -162,7 +182,7 @@ class DistanceAnalysisProvider:
                 tree_record=None,
                 newick_text=None,
             )
-        if report_is_exact:
+        if report_is_exact and report_has_required:
             return _analysis_from_report(
                 key=key,
                 group=group,
@@ -174,7 +194,14 @@ class DistanceAnalysisProvider:
             legacy_orthogroup_id=str(group.get("legacy_orthogroup_id", "")),
         )
         if tree_record is None:
-            if self.service.resource.schema_version < 3:
+            if required and (persisted or report_is_exact):
+                missing = "; ".join(required)
+                reason = (
+                    f"The cluster was found, but {missing} is not represented in its stored "
+                    "distance matrix. This resource has no portable gene tree from which to "
+                    "calculate a protein-focused matrix."
+                )
+            elif self.service.resource.schema_version < 3:
                 reason = (
                     "This schema-2 resource has no portable tree for on-demand distances. "
                     "Rebuild it with orthofinder-results 0.4 or later; the existing 25 "
@@ -188,10 +215,14 @@ class DistanceAnalysisProvider:
             tree_record=tree_record,
             max_members=max_members,
             nearest_neighbours=nearest_neighbours,
+            required_members=required,
         )
         if not force_recompute:
             cached = _read_cached_analysis(path=cache_path, expected_key=key)
-            if cached is not None:
+            if cached is not None and _analysis_contains_members(
+                analysis=cached,
+                required_members=required,
+            ):
                 _LOGGER.info("Loaded lazy group analysis from cache: %s", cache_path)
                 return replace(cached, cache_status="CACHE_HIT")
 
@@ -214,6 +245,15 @@ class DistanceAnalysisProvider:
                 f"Membership authority is incomplete for {key.display_label()}: expected "
                 f"{declared_member_count:,} rows but loaded {len(all_members):,}."
             )
+        available_member_ids = {str(row.get("member_id", "")) for row in all_members}
+        missing_required = tuple(
+            member for member in required if member not in available_member_ids
+        )
+        if missing_required:
+            raise InputValidationError(
+                "Required proteins are absent from the selected group membership: "
+                + "; ".join(missing_required)
+            )
         member_ids, aliases = _member_aliases(
             members=all_members,
             sequence_aliases=self.service.get_group_sequence_aliases(key=key),
@@ -234,6 +274,7 @@ class DistanceAnalysisProvider:
             max_members=max_members,
             member_ids=member_ids,
             member_aliases=aliases,
+            required_member_ids=required,
             source_file=(
                 "portable-tree://"
                 f"{tree_record['tree_type']}/{tree_record['tree_id']}"
@@ -344,6 +385,7 @@ class DistanceAnalysisProvider:
         tree_record: Mapping[str, Any],
         max_members: int,
         nearest_neighbours: int,
+        required_members: Sequence[str],
     ) -> Path:
         """Return a content-addressed sidecar cache path."""
 
@@ -356,6 +398,7 @@ class DistanceAnalysisProvider:
             "tree_sha256": str(tree_record["source_sha256"]),
             "max_members": max_members,
             "nearest_neighbours": nearest_neighbours,
+            "required_members": sorted(required_members),
         }
         digest = hashlib.sha256(
             json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -388,6 +431,86 @@ def _validate_analysis_controls(*, max_members: int, nearest_neighbours: int) ->
         raise InputValidationError(
             f"Nearest neighbours must be between 1 and {MAX_NEAREST_NEIGHBOURS:,}."
         )
+
+
+def _normalise_required_members(
+    *, values: Sequence[str], max_members: int
+) -> tuple[str, ...]:
+    """Return unique non-empty proteins required in a bounded calculation.
+
+    Args:
+        values: Requested canonical member identifiers.
+        max_members: Maximum members permitted in the resulting matrix.
+
+    Returns:
+        Stripped identifiers in caller order.
+
+    Raises:
+        InputValidationError: If values are malformed or exceed the matrix bound.
+    """
+
+    if isinstance(values, (str, bytes)):
+        raise InputValidationError("Required proteins must be supplied as a sequence.")
+    normalised = []
+    for value in values:
+        if not isinstance(value, str):
+            raise InputValidationError("Required protein identifiers must be text.")
+        member = value.strip()
+        if not member or "\x00" in member:
+            raise InputValidationError(
+                "Required protein identifiers must be non-empty and contain no NUL."
+            )
+        if member not in normalised:
+            normalised.append(member)
+    if len(normalised) > max_members:
+        raise InputValidationError(
+            "Required protein count cannot exceed the bounded analysis member limit."
+        )
+    return tuple(normalised)
+
+
+def _distance_rows_contain_members(
+    *, rows: Sequence[Mapping[str, Any]], required_members: Sequence[str]
+) -> bool:
+    """Return whether distance endpoints contain every required protein."""
+
+    if not required_members:
+        return True
+    observed = {
+        str(row.get(field, ""))
+        for row in rows
+        for field in ("member_a", "member_b")
+    }
+    return set(required_members).issubset(observed)
+
+
+def _report_contains_members(
+    *, entry: Mapping[str, Any] | None, required_members: Sequence[str]
+) -> bool:
+    """Return whether an embedded report matrix contains required proteins."""
+
+    if not required_members:
+        return True
+    if not isinstance(entry, Mapping):
+        return False
+    raw_members = entry.get("members")
+    if not isinstance(raw_members, list):
+        return False
+    observed = {
+        str(row.get("member_id", ""))
+        for row in raw_members
+        if isinstance(row, Mapping)
+    }
+    return set(required_members).issubset(observed)
+
+
+def _analysis_contains_members(
+    *, analysis: GroupAnalysis, required_members: Sequence[str]
+) -> bool:
+    """Return whether a cached analysis contains every required protein."""
+
+    observed = {str(row.get("member_id", "")) for row in analysis.members}
+    return set(required_members).issubset(observed)
 
 
 def _validate_cache_directory(*, cache_dir: Path, resource_path: Path) -> Path:

@@ -71,6 +71,39 @@ def test_schema3_lazy_analysis_is_exact_cached_and_forceable(
     assert forced.cache_status == "CACHE_WRITE"
 
 
+def test_schema3_lazy_analysis_retains_a_required_focus_protein(
+    schema3_resource: Path,
+    persistent_test_root: Path,
+) -> None:
+    """A protein lookup cannot silently sample its requested protein away."""
+
+    service = _service(schema3_resource)
+    provider = DistanceAnalysisProvider(
+        service=service,
+        cache_dir=persistent_test_root / "focused_analysis_cache",
+    )
+    key = _key(run_id="schema3-run", node="N1")
+    focused = provider.analyse(
+        key=key,
+        max_members=2,
+        nearest_neighbours=2,
+        required_members=("protB",),
+    )
+    assert focused.summary["sampled_member_count"] == 2
+    assert "protB" in {str(row["member_id"]) for row in focused.members}
+    assert any(
+        "protB" in (row["member_a"], row["member_b"])
+        for row in focused.distances
+    )
+    repeated = provider.analyse(
+        key=key,
+        max_members=2,
+        nearest_neighbours=2,
+        required_members=("protB",),
+    )
+    assert repeated.cache_status == "CACHE_HIT"
+
+
 def test_provider_prefers_persisted_pairs_and_schema2_report(
     schema3_resource: Path,
     application_resource: Path,

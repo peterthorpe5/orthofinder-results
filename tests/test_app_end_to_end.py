@@ -107,6 +107,47 @@ def test_all_distance_results_route_exports_complete_selection(
     )
 
 
+def test_protein_search_opens_focused_cluster_and_distance_table(
+    application_resource: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One canonical protein leads directly to highlighted visuals and distances."""
+
+    test = _application_test(
+        application_resource=application_resource,
+        monkeypatch=monkeypatch,
+    )
+    test.sidebar.radio[0].set_value("Find a protein")
+    test.run()
+    assert not test.exception
+    assert any(header.value == "Find a gene or protein" for header in test.header)
+    query_input = next(
+        widget
+        for widget in test.text_input
+        if widget.label == "Protein or OrthoFinder internal ID"
+    )
+    query_input.set_value("alpha_1")
+    next(
+        button for button in test.button if button.label == "Find this protein"
+    ).click()
+    test.run()
+    assert not test.exception
+    assert any(
+        metric.label == "Matching cluster records" and metric.value == "1"
+        for metric in test.metric
+    )
+    assert any(
+        subheader.value == "Distances from the requested protein"
+        for subheader in test.subheader
+    )
+    assert any(
+        metric.label == "Proteins compared" and metric.value == "2"
+        for metric in test.metric
+    )
+    assert len(test.get("plotly_chart")) >= 9
+    assert len(test.get("download_button")) >= 4
+
+
 def test_evolutionary_and_reviewed_taxonomy_routes(
     application_resource: Path,
     taxonomy_mapping_file: Path,

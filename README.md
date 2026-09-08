@@ -146,7 +146,7 @@ when the package is used only to build resources on a cluster.
 
 ## Interactive application
 
-Version 0.5.0 provides the read-only standalone application. It opens either a
+Version 0.6.0 provides the read-only standalone application. It opens either a
 completed resource directory or its `duckdb/orthofinder_results.duckdb` file:
 
 ```bash
@@ -178,6 +178,9 @@ The application provides:
 
 - a guided Summary landing page organised around biological questions, with
   contextual help, readable table headings and an expandable scientific glossary;
+- a dedicated gene/protein search across canonical membership identifiers and
+  available OrthoFinder internal IDs, returning every matching HOG level and flat
+  orthogroup before opening a protein-focused cluster view;
 - bounded group/member searches with exact group type and hierarchy;
 - exact stored-species filters with `ANY`, `ALL` and `EXACT_SET` semantics;
 - rejection of every group containing any selected excluded species;
@@ -188,6 +191,9 @@ The application provides:
 - original 2D, selectable-axis 2D and rotatable 3D PCoA, with separate 2D/3D
   retained-inertia, stress and distance-correlation diagnostics;
 - a Shepard plot, branch-length phylogram and exact displayed distance matrix;
+- a nearest-to-farthest distance table for a searched protein, with that protein
+  highlighted throughout the linked cluster views and forcibly retained in any
+  newly calculated bounded sample;
 - histogram, violin, empirical-CDF, medoid-distance, member-centrality and
   species-pair heatmap views of within-group dispersion; and
 - a 2–12-group workspace comparing means, population SDs, medians, exact
@@ -486,12 +492,11 @@ Open the database with:
 duckdb /path/to/output/duckdb/orthofinder_results.duckdb
 ```
 
-## Scope of version 0.5.0
+## Scope of version 0.6.0
 
-Version 0.5.0 adds paired formatted Excel/TSV downloads, graph-specific
-interpretation help and a selectable dataset-wide table of persisted distance
-statistics to the v0.4 portable-tree, taxonomy, dispersion and within-run
-comparison foundation. The standalone app owns generic OrthoFinder
+Version 0.6.0 adds protein-centred discovery, direct cluster opening, linked
+highlighting and focused exact-distance exports to the v0.5 formatted-download
+and dataset-wide distance-results foundation. The standalone app owns generic OrthoFinder
 interrogation: group membership, copy number, species breadth, reviewed
 taxonomy, distances, compactness, trees and within-run comparison. Explicit
 nested-HOG interrogation and cross-run cluster lineage (stable overlap scores
@@ -502,6 +507,14 @@ The dataset-wide page deliberately reports persisted resource results only. It
 does not silently mix calculations from a user's mutable on-demand sidecar into
 an immutable run-level export. Rebuild or publish those additional calculations
 before treating them as dataset-wide authority.
+
+Protein lookup searches identifiers stored by OrthoFinder; it does not infer gene
+symbols or descriptive aliases from external annotation databases. Exact search
+is case-sensitive, while the optional contains mode is literal, case-insensitive
+and browser-bounded. A selected protein is always retained in a new schema-3
+bounded tree calculation. If a schema-2 pilot matrix omitted that protein, the app
+reports the limitation because the immutable sample cannot be enlarged without a
+portable gene tree.
 
 E3-ligase ranking, expression, experimental evidence, structures, conserved
 ligandable pockets and chemistry starting points remain in the separate E3

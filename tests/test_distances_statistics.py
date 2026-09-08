@@ -117,10 +117,51 @@ def test_sampling_is_deterministic_and_validated() -> None:
         member_ids=("a", "b", "c"), run_id="r", group_id="g", max_members=2
     )
     assert first == second
+    focused = deterministic_member_sample(
+        member_ids=("a", "b", "c", "d"),
+        run_id="r",
+        group_id="g",
+        max_members=2,
+        required_member_ids=("d",),
+    )
+    assert "d" in focused[0]
+    assert len(focused[0]) == 2
     with pytest.raises(ValueError, match="unique"):
         deterministic_member_sample(member_ids=("a", "a"), run_id="r", group_id="g", max_members=2)
     with pytest.raises(ValueError, match="at least two"):
         deterministic_member_sample(member_ids=("a",), run_id="r", group_id="g", max_members=1)
+    with pytest.raises(ValueError, match="required_member_ids must be unique"):
+        deterministic_member_sample(
+            member_ids=("a", "b"),
+            run_id="r",
+            group_id="g",
+            max_members=2,
+            required_member_ids=("a", "a"),
+        )
+    with pytest.raises(ValueError, match="absent"):
+        deterministic_member_sample(
+            member_ids=("a", "b"),
+            run_id="r",
+            group_id="g",
+            max_members=2,
+            required_member_ids=("missing",),
+        )
+    with pytest.raises(ValueError, match="cannot exceed"):
+        deterministic_member_sample(
+            member_ids=("a", "b", "c"),
+            run_id="r",
+            group_id="g",
+            max_members=2,
+            required_member_ids=("a", "b", "c"),
+        )
+    with pytest.raises(ValueError, match="must not contain empty"):
+        deterministic_member_sample(
+            member_ids=("a", "b"),
+            run_id="r",
+            group_id="g",
+            max_members=2,
+            required_member_ids=("",),
+        )
 
 
 def test_patristic_distances_and_failure_modes(tmp_path: Path) -> None:
@@ -140,6 +181,17 @@ def test_patristic_distances_and_failure_modes(tmp_path: Path) -> None:
     assert rows[0]["distance_method"] == "patristic_branch_length"
     assert summary["maximum_distance"] == pytest.approx(0.9)
     assert summary["member_identifier_resolution"] == "EXACT_MEMBER_ID"
+    focused_rows, focused_summary = calculate_patristic_distances(
+        tree_path=tree,
+        run_id="r",
+        group_type="HOG",
+        hierarchy_node="N0",
+        group_id="H1",
+        max_members=2,
+        required_member_ids=("c",),
+    )
+    assert "c" in {focused_rows[0]["member_a"], focused_rows[0]["member_b"]}
+    assert focused_summary["computation_status"] == "DETERMINISTIC_MEMBER_SAMPLE"
     with pytest.raises(DistanceCalculationError, match="lacks 1 requested"):
         calculate_patristic_distances(
             tree_path=tree,

@@ -16,6 +16,8 @@ from .models import (
     DistanceResultSet,
     GroupKey,
     GroupSearchFilters,
+    ProteinSearchFilters,
+    ProteinSearchPage,
     ResourceIdentity,
     SearchPage,
     TaxonomySearchFilters,
@@ -29,6 +31,7 @@ MAX_GROUP_MEMBER_ROWS = 50_000
 MAX_GROUP_DISTANCE_ROWS = 124_750
 MAX_TAXONOMY_TEST_GROUPS = 250_000
 MAX_ALL_DISTANCE_RESULTS = 250_000
+MAX_PROTEIN_SEARCH_ROWS = 1_000
 _MEMBERSHIP_RELATIONS = {
     "HOG": "hog_memberships",
     "LEGACY_ORTHOGROUP": "legacy_orthogroup_memberships",
@@ -371,6 +374,58 @@ class OrthoFinderQueryService:
             len(columns),
         )
         return DistanceResultSet(rows=tuple(rows), total_rows=count, columns=columns)
+
+    def search_proteins(self, *, filters: ProteinSearchFilters) -> ProteinSearchPage:
+        """Find exact protein memberships and every associated cluster.
+
+        Canonical protein identifiers are always searched. OrthoFinder internal
+        identifiers are searched as aliases when the resource contains the
+        ``sequences`` relation. Results retain each HOG hierarchy level and legacy
+        orthogroup separately because these are distinct biological group records.
+
+        Args:
+            filters: Validated identifier, matching and result-bound controls.
+
+        Returns:
+            Bounded matching memberships with complete pre-limit result count.
+
+        Raises:
+            InputValidationError: If the requested group system is unsupported.
+        """
+
+        if filters.maximum_rows > MAX_PROTEIN_SEARCH_ROWS:
+            raise InputValidationError(
+                f"Protein searches return at most {MAX_PROTEIN_SEARCH_ROWS:,} rows."
+            )
+        sql, parameters = _protein_search_query(
+            run_id=self.resource.run_id,
+            filters=filters,
+            include_sequence_aliases=self.has_relation(relation="sequences"),
+        )
+        raw_rows = self._query(sql=sql, parameters=parameters)
+        total_rows = int(raw_rows[0]["_complete_match_count"]) if raw_rows else 0
+        rows = tuple(
+            {
+                key: value
+                for key, value in row.items()
+                if key != "_complete_match_count"
+            }
+            for row in raw_rows
+        )
+        _LOGGER.info(
+            "Protein search completed: run=%s, mode=%s, group_type=%s, "
+            "matches=%s, returned=%s",
+            self.resource.run_id,
+            filters.match_mode,
+            filters.group_type or "ALL",
+            total_rows,
+            len(rows),
+        )
+        return ProteinSearchPage(
+            rows=rows,
+            total_rows=total_rows,
+            maximum_rows=filters.maximum_rows,
+        )
 
     def search_groups(self, *, filters: GroupSearchFilters) -> SearchPage:
         """Return one bounded page matching exact search semantics.
@@ -930,6 +985,108 @@ def _distance_result_query(
         f"AND d.app_distance_rank = 1 WHERE {group_where}{order_sql}"
     )
     return sql, tuple((*distance_parameters, *group_parameters))
+
+
+def _protein_search_query(
+    *,
+    run_id: str,
+    filters: ProteinSearchFilters,
+    include_sequence_aliases: bool,
+) -> tuple[str, tuple[object, ...]]:
+    """Build one parameterised protein-to-cluster membership query.
+
+    Args:
+        run_id: Immutable resource run identifier.
+        filters: Validated protein search controls.
+        include_sequence_aliases: Whether the ``sequences`` relation is available.
+
+    Returns:
+        DuckDB SQL and ordered bound parameters.
+
+    Raises:
+        InputValidationError: If an exact group-system filter is unsupported.
+    """
+
+    if filters.group_type:
+        relation = _MEMBERSHIP_RELATIONS.get(filters.group_type)
+        if relation is None:
+            raise InputValidationError(
+                f"Unsupported protein group type: {filters.group_type}"
+            )
+        relations = (relation,)
+    else:
+        relations = tuple(_MEMBERSHIP_RELATIONS.values())
+    if filters.match_mode == "EXACT":
+        search_value = filters.query
+        member_match = "m.member_id = q.value"
+        alias_match = "s.internal_id = q.value"
+    else:
+        search_value = _literal_contains(value=filters.query)
+        member_match = "m.member_id ILIKE q.value ESCAPE '\\'"
+        alias_match = "s.internal_id ILIKE q.value ESCAPE '\\'"
+
+    branches = []
+    parameters: list[object] = [search_value]
+    for relation in relations:
+        if include_sequence_aliases:
+            alias_join = (
+                "LEFT JOIN sequences AS s ON s.run_id = m.run_id "
+                "AND s.member_id = m.member_id AND s.species_label = m.species_label "
+            )
+            internal_identifier = "coalesce(s.internal_id, '')"
+            combined_match = f"({member_match} OR {alias_match})"
+            match_source = (
+                f"CASE WHEN {member_match} AND {alias_match} THEN "
+                "'PROTEIN_AND_INTERNAL_ID' "
+                f"WHEN {member_match} THEN 'PROTEIN_ID' "
+                "ELSE 'ORTHOFINDER_INTERNAL_ID' END"
+            )
+            matched_identifier = (
+                f"CASE WHEN {member_match} THEN m.member_id ELSE s.internal_id END"
+            )
+        else:
+            alias_join = ""
+            internal_identifier = "''"
+            combined_match = member_match
+            match_source = "'PROTEIN_ID'"
+            matched_identifier = "m.member_id"
+        branches.append(
+            "SELECT DISTINCT m.run_id, m.group_type, m.hierarchy_node, m.group_id, "
+            "m.legacy_orthogroup_id, m.gene_tree_parent_clade, m.species_label, "
+            f"m.member_id, {internal_identifier} AS internal_id, "
+            f"{match_source} AS match_source, "
+            f"{matched_identifier} AS matched_identifier FROM {relation} AS m "
+            f"CROSS JOIN search_term AS q {alias_join}"
+            f"WHERE m.run_id = ? AND {combined_match}"
+        )
+        parameters.append(run_id)
+    membership_sql = " UNION ALL ".join(branches)
+    sql = (
+        "WITH search_term AS (SELECT ?::VARCHAR AS value), matched_members AS ("
+        f"{membership_sql}), preferred_distance AS (SELECT *, row_number() OVER ("
+        "PARTITION BY run_id, group_type, hierarchy_node, group_id ORDER BY "
+        "CASE WHEN sampled_member_count = total_member_count THEN 0 ELSE 1 END, "
+        "sampled_member_count DESC, distance_method, source_file) "
+        "AS app_distance_rank FROM distance_statistics) SELECT mm.run_id, mm.group_type, "
+        "mm.hierarchy_node, mm.group_id, mm.legacy_orthogroup_id, "
+        "mm.gene_tree_parent_clade, mm.species_label, mm.member_id, mm.internal_id, "
+        "mm.match_source, mm.matched_identifier, g.member_count, g.species_count, "
+        "g.single_copy_species_count, g.max_copies_per_species, "
+        "g.mean_copies_per_species, d.distance_method, d.computation_status, "
+        "d.sampled_member_count, d.distance_pair_count, d.mean_distance, "
+        "d.population_stddev_distance, count(*) OVER () AS _complete_match_count "
+        "FROM matched_members AS mm JOIN group_statistics AS g ON g.run_id = mm.run_id "
+        "AND g.group_type = mm.group_type AND g.hierarchy_node = mm.hierarchy_node "
+        "AND g.group_id = mm.group_id LEFT JOIN preferred_distance AS d "
+        "ON d.run_id = mm.run_id AND d.group_type = mm.group_type "
+        "AND d.hierarchy_node = mm.hierarchy_node AND d.group_id = mm.group_id "
+        "AND d.app_distance_rank = 1 ORDER BY CASE mm.match_source "
+        "WHEN 'PROTEIN_ID' THEN 0 WHEN 'PROTEIN_AND_INTERNAL_ID' THEN 1 ELSE 2 END, "
+        "mm.group_type, mm.hierarchy_node, mm.group_id, mm.species_label, mm.member_id "
+        "LIMIT ?"
+    )
+    parameters.append(filters.maximum_rows)
+    return sql, tuple(parameters)
 
 
 def _append_species_conditions(

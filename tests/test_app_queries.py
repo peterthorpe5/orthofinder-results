@@ -11,6 +11,7 @@ from orthofinder_interrogation_app.models import (
     DistanceResultFilters,
     GroupKey,
     GroupSearchFilters,
+    ProteinSearchFilters,
 )
 from orthofinder_interrogation_app.queries import OrthoFinderQueryService
 from orthofinder_interrogation_app.resource import open_resource
@@ -183,6 +184,107 @@ def test_all_distance_results_prefer_complete_then_apply_scope_filter(
     )
     assert sampled.total_rows == 1
     assert sampled.rows[0]["mean_distance"] == pytest.approx(9.0)
+
+
+def test_protein_search_finds_canonical_and_internal_identifiers(
+    query_service: OrthoFinderQueryService,
+) -> None:
+    """Protein searches retain exact clusters and resolve internal aliases."""
+
+    canonical = query_service.search_proteins(
+        filters=ProteinSearchFilters(query=" alpha_1 ")
+    )
+    assert canonical.total_rows == 1
+    assert canonical.truncated is False
+    assert canonical.rows[0]["member_id"] == "alpha_1"
+    assert canonical.rows[0]["internal_id"] == "0_0"
+    assert canonical.rows[0]["match_source"] == "PROTEIN_ID"
+    assert canonical.rows[0]["group_id"] == "N0.HOG1"
+    assert canonical.rows[0]["mean_distance"] == pytest.approx(0.1)
+
+    alias = query_service.search_proteins(
+        filters=ProteinSearchFilters(query="0_0")
+    )
+    assert alias.total_rows == 1
+    assert alias.rows[0]["matched_identifier"] == "0_0"
+    assert alias.rows[0]["member_id"] == "alpha_1"
+    assert alias.rows[0]["match_source"] == "ORTHOFINDER_INTERNAL_ID"
+
+
+def test_protein_contains_search_is_literal_bounded_and_filterable(
+    query_service: OrthoFinderQueryService,
+) -> None:
+    """Literal fragments, hierarchy duplication and result bounds remain explicit."""
+
+    contained = query_service.search_proteins(
+        filters=ProteinSearchFilters(
+            query="alpha",
+            match_mode="CONTAINS",
+            group_type="HOG",
+            maximum_rows=1,
+        )
+    )
+    assert contained.total_rows == 2
+    assert len(contained.rows) == 1
+    assert contained.truncated is True
+    literal = query_service.search_proteins(
+        filters=ProteinSearchFilters(query="%me", match_mode="CONTAINS")
+    )
+    assert [row["member_id"] for row in literal.rows] == ["literal%member"]
+    legacy = query_service.search_proteins(
+        filters=ProteinSearchFilters(
+            query="delta_1",
+            group_type="LEGACY_ORTHOGROUP",
+        )
+    )
+    assert legacy.rows[0]["hierarchy_node"] == ""
+    with pytest.raises(InputValidationError, match="Unsupported protein group"):
+        query_service.search_proteins(
+            filters=ProteinSearchFilters(query="alpha_1", group_type="OTHER")
+        )
+
+
+def test_protein_search_without_sequence_alias_relation(
+    application_resource: Path,
+) -> None:
+    """Canonical identifiers remain searchable in resources without alias rows."""
+
+    database = application_resource / "duckdb" / "orthofinder_results.duckdb"
+    connection = duckdb.connect(str(database))
+    try:
+        connection.execute("DROP TABLE sequences")
+    finally:
+        connection.close()
+    service = OrthoFinderQueryService(resource=open_resource(path=application_resource))
+    canonical = service.search_proteins(
+        filters=ProteinSearchFilters(query="alpha_1")
+    )
+    assert canonical.total_rows == 1
+    assert canonical.rows[0]["internal_id"] == ""
+    alias = service.search_proteins(filters=ProteinSearchFilters(query="0_0"))
+    assert alias.total_rows == 0
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"query": ""}, "Enter a protein"),
+        ({"query": "ab", "match_mode": "CONTAINS"}, "at least three"),
+        ({"query": "a", "match_mode": "UNKNOWN"}, "Unsupported protein"),
+        ({"query": "bad\nvalue"}, "control character"),
+        ({"query": "x" * 513}, "512"),
+        ({"query": "a", "group_type": 1}, "group_type must be text"),
+        ({"query": "a", "maximum_rows": 0}, "between 1 and 1,000"),
+        ({"query": "a", "maximum_rows": True}, "must be an integer"),
+    ],
+)
+def test_protein_search_filter_validation(
+    kwargs: dict[str, object], message: str
+) -> None:
+    """Malformed and unbounded protein searches fail before reaching DuckDB."""
+
+    with pytest.raises(InputValidationError, match=message):
+        ProteinSearchFilters(**kwargs)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(

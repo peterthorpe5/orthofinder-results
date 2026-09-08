@@ -127,6 +127,28 @@ def test_evolutionary_value_and_member_validation_helpers() -> None:
         evolutionary_page._required_mapping(entry={}, key="required")
 
 
+def test_focused_protein_distances_are_complete_ordered_and_validated() -> None:
+    """A searched protein receives every direct distance from nearest to farthest."""
+
+    rows = (
+        {"member_a": "focus", "member_b": "far", "distance": 2.0},
+        {"member_a": "near", "member_b": "focus", "distance": 0.25},
+        {"member_a": "other", "member_b": "far", "distance": 0.1},
+    )
+    focused = evolutionary_page._focused_distance_rows(
+        rows=rows,
+        focus_member=" focus ",
+    )
+    assert [row["distance"] for row in focused] == [0.25, 2.0]
+    with pytest.raises(InputValidationError, match="requires one protein"):
+        evolutionary_page._focused_distance_rows(rows=rows, focus_member="")
+    with pytest.raises(InputValidationError, match="malformed numeric"):
+        evolutionary_page._focused_distance_rows(
+            rows=({"member_a": "focus", "member_b": "x", "distance": "bad"},),
+            focus_member="focus",
+        )
+
+
 def test_taxonomy_page_mapping_precedence_and_scope_messages(
     taxonomy_mapping_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

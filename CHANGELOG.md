@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+## 0.6.0 - 2026-09-08
+
+- Add a dedicated **Find a gene / protein** page that searches canonical
+  OrthoFinder membership identifiers and, when available, internal identifiers
+  from `SequenceIDs.txt`.
+- Provide case-sensitive exact matching by default and an explicitly bounded,
+  literal, case-insensitive contains mode whose wildcard characters are safely
+  escaped.
+- Return every matching HOG hierarchy record and legacy orthogroup separately,
+  together with species, copy-count, group-size and preferred persisted-distance
+  summaries.
+- Open any matching membership directly in the complete cluster visualisation
+  suite, with the requested protein highlighted across linked views.
+- Add a protein-centred nearest-to-farthest exact-distance table, summary measures
+  and paired TSV/formatted-Excel downloads.
+- Guarantee that a requested protein is retained when a schema-3 portable-tree
+  analysis must deterministically sample a large cluster, and include that
+  requirement in the content-addressed cache identity.
+- Report explicitly when an older schema-2 persisted sample omitted the requested
+  protein and therefore cannot be expanded without a portable-tree rebuild.
+- Extend model, SQL, sampling, cache, page-helper and Streamlit end-to-end tests
+  for canonical IDs, aliases, literal matching, defensive bounds and focused
+  distance analysis.
+
 ## 0.5.0 - 2026-09-08
 
 - Add an **All distance results** page that exports one preferred successful

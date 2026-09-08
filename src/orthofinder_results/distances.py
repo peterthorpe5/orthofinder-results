@@ -200,6 +200,7 @@ def calculate_patristic_distances(
     max_members: int,
     member_ids: Sequence[str] | None = None,
     member_aliases: Mapping[str, Mapping[str, str]] | None = None,
+    required_member_ids: Sequence[str] = (),
     source_file: str = "",
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Calculate pairwise branch-length distances from one Newick gene tree.
@@ -214,6 +215,8 @@ def calculate_patristic_distances(
         member_ids: Optional canonical member subset, for example one HOG within a tree.
         member_aliases: Optional canonical-member mapping whose inner keys are
             alternative tree labels and values describe the resolution method.
+        required_member_ids: Canonical members that must be retained when a
+            bounded deterministic sample is required.
         source_file: Exact tree path for provenance; defaults to ``tree_path``.
 
     Returns:
@@ -240,6 +243,7 @@ def calculate_patristic_distances(
         max_members=max_members,
         member_ids=member_ids,
         member_aliases=member_aliases,
+        required_member_ids=required_member_ids,
         source_file=provenance_source,
     )
 
@@ -254,6 +258,7 @@ def calculate_patristic_distances_from_newick(
     max_members: int,
     member_ids: Sequence[str] | None = None,
     member_aliases: Mapping[str, Mapping[str, str]] | None = None,
+    required_member_ids: Sequence[str] = (),
     source_file: str = "portable tree payload",
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Calculate pairwise branch-length distances from portable Newick text.
@@ -267,6 +272,8 @@ def calculate_patristic_distances_from_newick(
         max_members: Maximum leaves in the exact or sampled matrix.
         member_ids: Optional canonical member subset.
         member_aliases: Alternative tree labels and their resolution methods.
+        required_member_ids: Canonical members that must be retained when a
+            bounded deterministic sample is required.
         source_file: Portable provenance label stored in every result row.
 
     Returns:
@@ -297,6 +304,7 @@ def calculate_patristic_distances_from_newick(
         max_members=max_members,
         member_ids=member_ids,
         member_aliases=member_aliases,
+        required_member_ids=required_member_ids,
     )
 
 
@@ -311,6 +319,7 @@ def _calculate_patristic_tree(
     max_members: int,
     member_ids: Sequence[str] | None,
     member_aliases: Mapping[str, Mapping[str, str]] | None,
+    required_member_ids: Sequence[str],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Calculate distances from one already parsed Biopython tree."""
 
@@ -376,6 +385,7 @@ def _calculate_patristic_tree(
         run_id=run_id,
         group_id=group_id,
         max_members=max_members,
+        required_member_ids=required_member_ids,
     )
     if len(selected) < 2:
         raise DistanceCalculationError(f"Group {group_id} contains fewer than two tree leaves.")
@@ -575,7 +585,12 @@ def pairwise_p_distance(*, sequence_a: str, sequence_b: str) -> tuple[float | No
 
 
 def deterministic_member_sample(
-    *, member_ids: Sequence[str], run_id: str, group_id: str, max_members: int
+    *,
+    member_ids: Sequence[str],
+    run_id: str,
+    group_id: str,
+    max_members: int,
+    required_member_ids: Sequence[str] = (),
 ) -> tuple[tuple[str, ...], str]:
     """Select a deterministic, order-independent subset of group members.
 
@@ -584,6 +599,7 @@ def deterministic_member_sample(
         run_id: Immutable run identifier.
         group_id: Run-scoped group identifier.
         max_members: Maximum selected members.
+        required_member_ids: Members that must be retained in a bounded sample.
 
     Returns:
         Sorted selected identifiers and explicit calculation status.
@@ -598,15 +614,30 @@ def deterministic_member_sample(
         raise ValueError("member_ids must be unique.")
     if any(not member_id for member_id in member_ids):
         raise ValueError("member_ids must not contain empty values.")
+    required = tuple(required_member_ids)
+    required_set = set(required)
+    if len(required_set) != len(required):
+        raise ValueError("required_member_ids must be unique.")
+    if any(not member_id for member_id in required):
+        raise ValueError("required_member_ids must not contain empty values.")
+    unknown = sorted(required_set.difference(member_ids))
+    if unknown:
+        raise ValueError(
+            "required_member_ids are absent from member_ids: " + ";".join(unknown)
+        )
+    if len(required) > max_members:
+        raise ValueError("required_member_ids cannot exceed max_members.")
     if len(member_ids) <= max_members:
         return tuple(sorted(member_ids)), "EXACT"
     ranked = sorted(
-        member_ids,
+        (member_id for member_id in member_ids if member_id not in required_set),
         key=lambda member_id: hashlib.sha256(
             f"{run_id}\0{group_id}\0{member_id}".encode("utf-8")
         ).hexdigest(),
     )
-    return tuple(sorted(ranked[:max_members])), "DETERMINISTIC_MEMBER_SAMPLE"
+    available_slots = max_members - len(required)
+    selected = (*required, *ranked[:available_slots])
+    return tuple(sorted(selected)), "DETERMINISTIC_MEMBER_SAMPLE"
 
 
 def summarise_distances(

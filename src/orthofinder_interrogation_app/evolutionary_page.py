@@ -111,6 +111,62 @@ def render_evolutionary_views(
     if key is None:
         st.info("Choose a precomputed group or enter one exact group identifier to begin.")
         return
+    _render_group_analysis(
+        service=service,
+        cache_dir=cache_dir,
+        catalog=catalog,
+        key=key,
+    )
+
+
+def render_selected_group_visualisations(
+    *,
+    resource: Any,
+    service: OrthoFinderQueryService,
+    cache_dir: Path,
+    key: GroupKey,
+    focus_member: str,
+) -> None:
+    """Render every cluster view with one searched protein highlighted.
+
+    Args:
+        resource: Validated immutable resource identity.
+        service: Read-only DuckDB service for the same resource.
+        cache_dir: Persistent analysis sidecar outside the resource.
+        key: Exact selected cluster.
+        focus_member: Canonical protein identifier to include and highlight.
+    """
+
+    if key.run_id != service.resource.run_id:
+        raise InputValidationError("Selected protein cluster belongs to another run.")
+    member = focus_member.strip()
+    if not member:
+        raise InputValidationError("Protein-focused visualisation requires one identifier.")
+    st.subheader(f"Protein-focused cluster view: {key.display_label()}")
+    st.caption(
+        f"The requested protein **{member}** is highlighted wherever it occurs. "
+        "For a newly calculated bounded matrix, it is retained deliberately rather "
+        "than left to the ordinary deterministic sample."
+    )
+    _render_group_analysis(
+        service=service,
+        cache_dir=cache_dir,
+        catalog=_load_catalog(resource=resource),
+        key=key,
+        focus_member=member,
+    )
+
+
+def _render_group_analysis(
+    *,
+    service: OrthoFinderQueryService,
+    cache_dir: Path,
+    catalog: VisualisationCatalog | None,
+    key: GroupKey,
+    focus_member: str = "",
+) -> None:
+    """Load and render a selected cluster with optional protein focus."""
+
     controls = st.columns((2, 2, 2, 3))
     max_members = int(
         controls[0].select_slider(
@@ -157,12 +213,17 @@ def render_evolutionary_views(
                 max_members=max_members,
                 nearest_neighbours=nearest_neighbours,
                 force_recompute=force_recompute,
+                required_members=((focus_member,) if focus_member else ()),
             )
     except OrthoFinderResultsError as error:
         st.warning(str(error))
         return
     _comparison_control(key=key)
-    _render_analysis(analysis=analysis, nearest_neighbours=nearest_neighbours)
+    _render_analysis(
+        analysis=analysis,
+        nearest_neighbours=nearest_neighbours,
+        focus_member=focus_member,
+    )
 
 
 @st.cache_data(show_spinner="Loading embedded pilot records…")
@@ -337,7 +398,12 @@ def _catalog_keys(
     return tuple(keys)
 
 
-def _render_analysis(*, analysis: GroupAnalysis, nearest_neighbours: int) -> None:
+def _render_analysis(
+    *,
+    analysis: GroupAnalysis,
+    nearest_neighbours: int,
+    focus_member: str = "",
+) -> None:
     """Render every linked cluster view from one exact analysis record."""
 
     entry = analysis.visual_entry
@@ -366,11 +432,19 @@ def _render_analysis(*, analysis: GroupAnalysis, nearest_neighbours: int) -> Non
             ),
         )
     )
+    member_selection_key = f"linked_members_{_state_token(key=analysis.key)}"
+    if focus_member and focus_member in member_species:
+        current_selection = st.session_state.get(member_selection_key, [])
+        if not isinstance(current_selection, list):
+            current_selection = []
+        st.session_state[member_selection_key] = list(
+            dict.fromkeys((*current_selection, focus_member))
+        )
     selected_members = tuple(
         columns[1].multiselect(
             "Highlight proteins across all views",
             tuple(sorted(member_species)),
-            key=f"linked_members_{_state_token(key=analysis.key)}",
+            key=member_selection_key,
             help="Highlights exact protein identifiers in each linked plot.",
         )
     )
@@ -383,6 +457,11 @@ def _render_analysis(*, analysis: GroupAnalysis, nearest_neighbours: int) -> Non
         st.info(
             f"Linked selection: {len(linked):,} of {len(member_species):,} displayed "
             f"members across {len({member_species[value] for value in linked}):,} species."
+        )
+    if focus_member:
+        _render_focused_protein_distances(
+            analysis=analysis,
+            focus_member=focus_member,
         )
     try:
         geometry = classical_pcoa(rows=analysis.distances, members=analysis.members)
@@ -690,6 +769,121 @@ def _render_enhanced_pcoa(
         "PCoA is a diagnostic approximation. Apparent arms, gaps and angles are not "
         "subfamilies without confirmation in the exact matrix and phylogram."
     )
+
+
+def _render_focused_protein_distances(
+    *, analysis: GroupAnalysis, focus_member: str
+) -> None:
+    """Render every displayed distance from one searched protein.
+
+    Args:
+        analysis: Validated shared cluster analysis.
+        focus_member: Canonical protein identifier selected by the search page.
+    """
+
+    rows = _focused_distance_rows(
+        rows=analysis.distances,
+        focus_member=focus_member,
+    )
+    st.subheader("Distances from the requested protein")
+    if not rows:
+        st.warning(
+            f"{focus_member} belongs to this cluster but is not represented in the stored "
+            "distance matrix. A schema-3 portable tree is required to calculate a new "
+            "bounded matrix that deliberately includes it."
+        )
+        return
+    distances = tuple(float(row["distance"]) for row in rows)
+    nearest = rows[0]
+    other_member = (
+        str(nearest["member_b"])
+        if str(nearest["member_a"]) == focus_member
+        else str(nearest["member_a"])
+    )
+    metrics = st.columns(4)
+    metrics[0].metric(
+        "Proteins compared",
+        f"{len(rows):,}",
+        help="Other analysed proteins with an exact distance from the requested protein.",
+    )
+    metrics[1].metric(
+        "Nearest analysed protein",
+        other_member,
+        help="Protein with the smallest displayed exact distance from the requested protein.",
+    )
+    metrics[2].metric(
+        "Nearest distance",
+        f"{distances[0]:.4g}",
+        help="Smallest exact displayed distance involving the requested protein.",
+    )
+    metrics[3].metric(
+        "Average distance",
+        f"{sum(distances) / len(distances):.4g}",
+        help="Mean distance from the requested protein to all other analysed proteins.",
+    )
+    st.write(
+        "This is the direct protein-centred distance table. It contains one row for every "
+        "other protein in the displayed exact or bounded matrix and is ordered from nearest "
+        "to farthest."
+    )
+    displayed = tuple(_display_pair_distance_row(row=row) for row in rows)
+    st.dataframe(
+        displayed,
+        width="stretch",
+        hide_index=True,
+        column_config=_column_config(descriptions=_PAIR_DISTANCE_HELP),
+    )
+    render_table_downloads(
+        records=displayed,
+        file_stem=f"{focus_member}_focused_pair_distances",
+        key=f"focused_distances_{_state_token(key=analysis.key)}",
+        tsv_label="Download these protein distances as TSV",
+        excel_label="Download these protein distances as formatted Excel",
+        column_definitions=_PAIR_DISTANCE_HELP,
+        workbook_title=f"OrthoFinder distances from {focus_member}",
+    )
+
+
+def _focused_distance_rows(
+    *, rows: tuple[dict[str, Any], ...], focus_member: str
+) -> tuple[dict[str, Any], ...]:
+    """Return all exact rows involving one protein, nearest first.
+
+    Args:
+        rows: Decorated pairwise-distance records.
+        focus_member: Canonical protein identifier.
+
+    Returns:
+        Matching distance records ordered by distance and other endpoint.
+
+    Raises:
+        InputValidationError: If the focus identifier or a distance is invalid.
+    """
+
+    member = focus_member.strip()
+    if not member:
+        raise InputValidationError("Focused distance search requires one protein.")
+    focused = tuple(
+        row
+        for row in rows
+        if member in (str(row.get("member_a", "")), str(row.get("member_b", "")))
+    )
+    try:
+        return tuple(
+            sorted(
+                focused,
+                key=lambda row: (
+                    float(row["distance"]),
+                    str(row["member_b"])
+                    if str(row["member_a"]) == member
+                    else str(row["member_a"]),
+                ),
+            )
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise InputValidationError(
+            "Focused protein distances contain a malformed numeric value."
+        ) from error
 
 
 def _render_pair_table(*, analysis: GroupAnalysis) -> None:

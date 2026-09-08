@@ -26,6 +26,7 @@ from orthofinder_interrogation_app.launcher import (
     TAXONOMY_ENVIRONMENT_VARIABLE,
 )
 from orthofinder_interrogation_app.models import GroupKey, GroupSearchFilters
+from orthofinder_interrogation_app.protein_page import render_protein_search
 from orthofinder_interrogation_app.queries import (
     MAX_GROUP_MEMBER_ROWS,
     OrthoFinderQueryService,
@@ -39,6 +40,7 @@ from orthofinder_results.io_utils import configure_logging
 _LOGGER = logging.getLogger("orthofinder_interrogation_app.app")
 _PAGES = (
     "Overview",
+    "Find a protein",
     "Find groups",
     "Cluster explorer",
     "Compare clusters",
@@ -49,6 +51,7 @@ _PAGES = (
 )
 _PAGE_LABELS = {
     "Overview": "Summary",
+    "Find a protein": "Find a gene / protein",
     "Find groups": "Find groups",
     "Cluster explorer": "Explore one cluster",
     "Compare clusters": "Compare clusters",
@@ -189,6 +192,12 @@ def main() -> None:
         _render_resource_identity(resource=resource)
         if page_name == "Overview":
             _render_overview(service=service)
+        elif page_name == "Find a protein":
+            render_protein_search(
+                resource=resource,
+                service=service,
+                cache_dir=cache_dir,
+            )
         elif page_name == "Find groups":
             _render_group_search(service=service)
         elif page_name == "Cluster explorer":
@@ -350,36 +359,43 @@ def _render_overview(*, service: OrthoFinderQueryService) -> None:
             "need a schema-3 rebuild before the app can calculate distances on demand."
         )
     st.subheader("Choose your question")
-    actions = st.columns(5)
-    actions[0].markdown("#### Which groups contain my species?")
+    actions = st.columns(3)
+    actions[0].markdown("#### Which cluster contains my protein?")
     actions[0].write(
+        "Find an exact protein or internal ID, then inspect its cluster and distances."
+    )
+    if actions[0].button("Find a gene or protein", key="summary_find_protein"):
+        _navigate_to(page="Find a protein")
+    actions[1].markdown("#### Which groups contain my species?")
+    actions[1].write(
         "Require one, every, or exactly a set of sampled species, and reject unwanted species."
     )
-    if actions[0].button("Find groups", key="summary_find_groups"):
+    if actions[1].button("Find groups", key="summary_find_groups"):
         _navigate_to(page="Find groups")
-    actions[1].markdown("#### How compact or dispersed is one group?")
-    actions[1].write(
+    actions[2].markdown("#### How compact or dispersed is one group?")
+    actions[2].write(
         "Inspect exact distances, distributions, PCoA, a gene-tree phylogram and networks."
     )
-    if actions[1].button("Explore one cluster", key="summary_explore"):
+    if actions[2].button("Explore one cluster", key="summary_explore"):
         _navigate_to(page="Cluster explorer")
-    actions[2].markdown("#### Which groups focus on a lineage?")
-    actions[2].write(
+    more_actions = st.columns(3)
+    more_actions[0].markdown("#### Which groups focus on a lineage?")
+    more_actions[0].write(
         "Search reviewed taxonomic descendants using contains, enrichment or exclusivity."
     )
-    if actions[2].button("Search taxonomy", key="summary_taxonomy"):
+    if more_actions[0].button("Search taxonomy", key="summary_taxonomy"):
         _navigate_to(page="Taxonomic search")
-    actions[3].markdown("#### How do candidate groups differ?")
-    actions[3].write(
+    more_actions[1].markdown("#### How do candidate groups differ?")
+    more_actions[1].write(
         "Collect 2–12 groups and compare distance spread, compactness and PCoA shape."
     )
-    if actions[3].button("Compare clusters", key="summary_compare"):
+    if more_actions[1].button("Compare clusters", key="summary_compare"):
         _navigate_to(page="Compare clusters")
-    actions[4].markdown("#### Which clusters have distance results?")
-    actions[4].write(
+    more_actions[2].markdown("#### Which clusters have distance results?")
+    more_actions[2].write(
         "Select columns and export every persisted cluster-distance summary in one table."
     )
-    if actions[4].button("All distance results", key="summary_all_results"):
+    if more_actions[2].button("All distance results", key="summary_all_results"):
         _navigate_to(page="All distance results")
 
     with st.expander("Detailed group collections and hierarchy levels", expanded=False):
@@ -767,11 +783,13 @@ def _render_help() -> None:
         st.markdown(
             """
             1. Open **Summary** to understand the run and its distance capability.
-            2. Use **Find groups** for exact species, identifier, size and copy-number questions.
-            3. Send an interesting result to **Explore one cluster** for distances and trees.
-            4. Add 2–12 groups to **Compare clusters** when the same distance method and
+            2. Use **Find a gene / protein** to locate a stored identifier, inspect every
+               cluster membership and highlight it throughout a selected cluster.
+            3. Use **Find groups** for exact species, identifier, size and copy-number questions.
+            4. Send an interesting result to **Explore one cluster** for distances and trees.
+            5. Add 2–12 groups to **Compare clusters** when the same distance method and
                sampling scope are scientifically comparable.
-            5. Use **All distance results** to select columns and export every cluster with a
+            6. Use **All distance results** to select columns and export every cluster with a
                persisted distance summary as formatted Excel or TSV.
 
             **Taxonomic search** is a separate, stricter workflow because descendant claims
@@ -788,6 +806,21 @@ def _render_help() -> None:
               number of unique root families.
             - **Species represented** counts species with at least one protein in a group.
             - **Average copies per represented species** excludes species absent from that group.
+            """
+        )
+    with st.expander("Finding one gene or protein"):
+        st.markdown(
+            """
+            The dedicated search accepts canonical membership IDs and, when available,
+            OrthoFinder internal IDs from `SequenceIDs.txt`. Exact search is case-sensitive;
+            the optional contains search is literal and case-insensitive. Descriptive gene
+            symbols or annotations are searchable only when they occur in the stored identifier.
+
+            Selecting a result opens the complete cluster visual suite and highlights the
+            canonical protein. A separate nearest-to-farthest table reports every displayed
+            distance involving it. If a schema-3 calculation must sample a large group, the
+            requested protein is forcibly retained. A schema-2 matrix cannot be expanded when
+            the protein was not included in its original persisted sample.
             """
         )
     with st.expander("Required species, exact sets and rejected species"):
