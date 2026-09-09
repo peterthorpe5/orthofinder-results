@@ -67,15 +67,10 @@ OUTPUT_NAME=$(basename -- "$PERSISTENT_OUTPUT")
 umask 077
 JOB_ID=${SLURM_JOB_ID:-manual_$$}
 JOB_WORK_DIR=$(mktemp -d "${TMPDIR%/}/orthofinder_e3_${USER}_${JOB_ID}_XXXXXX")
-PERSISTENT_INCOMING=""
 PUBLISH_LOCK=""
 
 cleanup() {
-    local expected_incoming="$OUTPUT_PARENT/.${OUTPUT_NAME}.incoming.${JOB_ID}"
     local expected_lock="$OUTPUT_PARENT/.${OUTPUT_NAME}.publish.lock"
-    if [[ -n "$PERSISTENT_INCOMING" && "$PERSISTENT_INCOMING" == "$expected_incoming" ]]; then
-        rm -rf -- "$PERSISTENT_INCOMING"
-    fi
     if [[ -n "$PUBLISH_LOCK" && "$PUBLISH_LOCK" == "$expected_lock" ]]; then
         rmdir "$PUBLISH_LOCK" 2>/dev/null || true
     fi
@@ -101,6 +96,18 @@ REQUIRED_KB=$((SOURCE_KB + RESERVE_KB))
 }
 echo "TMPDIR capacity check: source=${SOURCE_KB} KiB, free=${AVAILABLE_KB} KiB, analysis reserve=${RESERVE_KB} KiB"
 
+mkdir -p -- "$OUTPUT_PARENT"
+PUBLISH_LOCK_CANDIDATE="$OUTPUT_PARENT/.${OUTPUT_NAME}.publish.lock"
+mkdir -- "$PUBLISH_LOCK_CANDIDATE" || {
+    echo "ERROR: another publication holds the output lock: $PUBLISH_LOCK_CANDIDATE" >&2
+    exit 2
+}
+PUBLISH_LOCK="$PUBLISH_LOCK_CANDIDATE"
+[[ ! -e "$PERSISTENT_OUTPUT" ]] || {
+    echo "ERROR: persistent output appeared during setup: $PERSISTENT_OUTPUT" >&2
+    exit 2
+}
+
 RESULTS_STAGE="$JOB_WORK_DIR/orthofinder_results_source"
 mkdir "$RESULTS_STAGE"
 echo "Staging completed OrthoFinder inputs to scheduler TMPDIR."
@@ -118,7 +125,6 @@ else
     cp -- "$FOCUS_SOURCE" "$FOCUS_STAGE"
 fi
 
-LOCAL_OUTPUT="$JOB_WORK_DIR/completed_resource"
 PIPELINE_WORK="$JOB_WORK_DIR/pipeline_work"
 "$PACKAGE_ROOT/run_orthofinder_results.sh" \
     --conda-env "$CONDA_ENV" \
@@ -127,17 +133,17 @@ PIPELINE_WORK="$JOB_WORK_DIR/pipeline_work"
     --results-dir "$RESULTS_STAGE" \
     --focus-proteins "$FOCUS_STAGE" \
     --run-id "$RUN_ID" \
-    --output-dir "$LOCAL_OUTPUT" \
+    --output-dir "$PERSISTENT_OUTPUT" \
     --work-dir "$PIPELINE_WORK" \
     "$@"
 
-[[ -f "$LOCAL_OUTPUT/run_manifest.json" ]] || {
-    echo "ERROR: completed local resource lacks run_manifest.json." >&2
+[[ -f "$PERSISTENT_OUTPUT/run_manifest.json" ]] || {
+    echo "ERROR: published resource lacks run_manifest.json." >&2
     exit 2
 }
 grep -Eq '"status"[[:space:]]*:[[:space:]]*"complete"' \
-    "$LOCAL_OUTPUT/run_manifest.json" || {
-        echo "ERROR: local run manifest is not marked complete." >&2
+    "$PERSISTENT_OUTPUT/run_manifest.json" || {
+        echo "ERROR: published run manifest is not marked complete." >&2
         exit 2
     }
 for required_file in \
@@ -147,50 +153,21 @@ for required_file in \
     tables/pairwise_distances.tsv.gz \
     duckdb/orthofinder_results.duckdb \
     qc/validation_checks.tsv; do
-    [[ -s "$LOCAL_OUTPUT/$required_file" ]] || {
-        echo "ERROR: completed local resource lacks required output: $required_file" >&2
+    [[ -s "$PERSISTENT_OUTPUT/$required_file" ]] || {
+        echo "ERROR: published resource lacks required output: $required_file" >&2
         exit 2
     }
 done
 gzip -t \
-    "$LOCAL_OUTPUT/tables/e3_cluster_results.tsv.gz" \
-    "$LOCAL_OUTPUT/tables/e3_seed_catalogue_audit.tsv.gz" \
-    "$LOCAL_OUTPUT/tables/e3_seed_matches.tsv.gz" \
-    "$LOCAL_OUTPUT/tables/pairwise_distances.tsv.gz"
+    "$PERSISTENT_OUTPUT/tables/e3_cluster_results.tsv.gz" \
+    "$PERSISTENT_OUTPUT/tables/e3_seed_catalogue_audit.tsv.gz" \
+    "$PERSISTENT_OUTPUT/tables/e3_seed_matches.tsv.gz" \
+    "$PERSISTENT_OUTPUT/tables/pairwise_distances.tsv.gz"
 
-mkdir -p -- "$OUTPUT_PARENT"
-PERSISTENT_INCOMING="$OUTPUT_PARENT/.${OUTPUT_NAME}.incoming.${JOB_ID}"
-[[ ! -e "$PERSISTENT_INCOMING" ]] || {
-    echo "ERROR: persistent incoming path already exists: $PERSISTENT_INCOMING" >&2
-    exit 2
-}
-mkdir -m 700 -- "$PERSISTENT_INCOMING"
-echo "Copying completed resource to persistent incoming path: $PERSISTENT_INCOMING"
-rsync -a -- "$LOCAL_OUTPUT/" "$PERSISTENT_INCOMING/"
-VERIFY_OUTPUT=$(rsync -a --checksum --dry-run --itemize-changes -- \
-    "$LOCAL_OUTPUT/" "$PERSISTENT_INCOMING/")
-[[ -z "$VERIFY_OUTPUT" ]] || {
-    echo "ERROR: persistent copy differs from the completed TMPDIR resource." >&2
-    echo "$VERIFY_OUTPUT" >&2
-    exit 2
-}
-
-PUBLISH_LOCK_CANDIDATE="$OUTPUT_PARENT/.${OUTPUT_NAME}.publish.lock"
-mkdir -- "$PUBLISH_LOCK_CANDIDATE" || {
-    echo "ERROR: another publication holds the output lock: $PUBLISH_LOCK_CANDIDATE" >&2
-    exit 2
-}
-PUBLISH_LOCK="$PUBLISH_LOCK_CANDIDATE"
-[[ ! -e "$PERSISTENT_OUTPUT" ]] || {
-    echo "ERROR: persistent output appeared during publication: $PERSISTENT_OUTPUT" >&2
-    exit 2
-}
-mv "$PERSISTENT_INCOMING" "$PERSISTENT_OUTPUT"
-PERSISTENT_INCOMING=""
 rmdir "$PUBLISH_LOCK"
 PUBLISH_LOCK=""
 
-echo "Published completed E3 precursor resource: $PERSISTENT_OUTPUT"
+echo "Validated completed E3 precursor resource: $PERSISTENT_OUTPUT"
 echo "Primary cluster table: $PERSISTENT_OUTPUT/tables/e3_cluster_results.tsv.gz"
 echo "Pairwise distance table: $PERSISTENT_OUTPUT/tables/pairwise_distances.tsv.gz"
 sha256sum \

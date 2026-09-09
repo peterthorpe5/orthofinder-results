@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Fix the E3 Slurm wrapper to pass the persistent formal output to the pipeline
+  while retaining all resource construction beneath scheduler `TMPDIR`; this
+  removes a conflict with the persistent-output safety policy.
+- Delegate cross-filesystem checksum verification and atomic publication to the
+  tested pipeline publication layer, while retaining the wrapper's destination
+  lock, required-output validation and failure cleanup.
+
 ## 0.8.0 - 2026-09-09
 
 - Replace the implicit default with the exact supplied 1,000-record

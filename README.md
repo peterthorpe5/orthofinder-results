@@ -173,8 +173,9 @@ companion `tables/pairwise_distances.tsv.gz` retains every calculated pair;
 distance calculations remain explicit `UNAVAILABLE` rows with blank statistics.
 
 For Slurm, [`slurm/e3_precursor.sbatch`](slurm/e3_precursor.sbatch) requires a
-scheduler-provided `TMPDIR`, stages source reads and initial output there, then
-checksum-compares a hidden persistent copy before a locked atomic rename. See
+scheduler-provided `TMPDIR` and stages source reads and resource construction
+there. The pipeline checksum-verifies its hidden persistent copy before atomic
+publication while the wrapper holds a destination lock. See
 the [complete E3 precursor guide](docs/e3_precursor.md) for the exact contract,
 outputs and downstream parsing guidance.
 

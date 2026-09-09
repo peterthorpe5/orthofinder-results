@@ -80,10 +80,10 @@ def _wrapper_arguments(*, tmp_path: Path) -> tuple[list[str], Path, Path]:
     )
 
 
-def test_e3_wrapper_stages_verifies_and_atomically_publishes(
+def test_e3_wrapper_delegates_verified_publication_to_pipeline(
     tmp_path: Path,
 ) -> None:
-    """Source reads and initial analytical outputs remain under scheduler TMPDIR."""
+    """Sources and work use TMPDIR while the pipeline receives persistent output."""
 
     arguments, output, capture = _wrapper_arguments(tmp_path=tmp_path)
     node_tmp = tmp_path / "node_tmp"
@@ -108,9 +108,11 @@ def test_e3_wrapper_stages_verifies_and_atomically_publishes(
     assert (output / "tables/e3_cluster_results.tsv.gz").is_file()
     assert "Primary cluster table" in completed.stdout
     captured = capture.read_text(encoding="utf-8").splitlines()
-    for option in ("--results-dir", "--focus-proteins", "--output-dir", "--work-dir"):
+    for option in ("--results-dir", "--focus-proteins", "--work-dir"):
         index = captured.index(option)
         assert captured[index + 1].startswith(str(node_tmp))
+    output_index = captured.index("--output-dir")
+    assert captured[output_index + 1] == str(output)
     assert captured[captured.index("--action") + 1] == "e3-precursor"
     assert captured[captured.index("--run-id") + 1] == "e3-run"
     assert not tuple((tmp_path / "persistent").glob(".*.incoming.*"))
@@ -127,6 +129,8 @@ def test_e3_wrapper_uses_portable_date_and_move_commands() -> None:
     assert "mv -T" not in source
     assert "${TMPDIR:-/tmp}" not in source
     assert "date -u '+%Y-%m-%dT%H:%M:%SZ'" in source
+    assert '--output-dir "$PERSISTENT_OUTPUT"' in source
+    assert 'completed_resource' not in source
 
 
 def test_e3_wrapper_preserves_existing_publication_lock(tmp_path: Path) -> None:
@@ -157,6 +161,7 @@ def test_e3_wrapper_preserves_existing_publication_lock(tmp_path: Path) -> None:
     assert "another publication holds the output lock" in completed.stderr
     assert lock.is_dir()
     assert not output.exists()
+    assert not capture.exists()
     assert not tuple(output.parent.glob(".*.incoming.*"))
     assert not tuple(node_tmp.iterdir())
 

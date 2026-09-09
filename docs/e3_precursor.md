@@ -79,10 +79,11 @@ orthofinder-results \
   --distance-max-members 250
 ```
 
-The Slurm wrapper is preferred because it stages all source reads and initial
-outputs below scheduler-provided `TMPDIR`, validates the compressed outputs,
-copies to a hidden incoming directory on persistent storage, checksum-compares
-the complete copy and performs a locked same-filesystem rename:
+The Slurm wrapper is preferred because it stages all source reads and resource
+construction below scheduler-provided `TMPDIR`. It passes the persistent formal
+output to the pipeline, whose publication layer checksum-verifies a hidden copy
+beside that destination before an atomic rename. The wrapper also holds a
+run-specific publication lock and validates the required compressed outputs:
 
 ```text
 slurm/e3_precursor.sbatch
