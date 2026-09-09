@@ -250,6 +250,7 @@ def iter_portable_tree_payloads(
     layout: ResultLayout,
     run_id: str,
     inventory: Iterable[dict[str, Any]],
+    selected_tree_ids: frozenset[str] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield compressed portable gene-tree payloads for lazy app calculations.
 
@@ -261,6 +262,7 @@ def iter_portable_tree_payloads(
         layout: Discovered OrthoFinder result layout.
         run_id: Immutable run identifier.
         inventory: Checksum-bound tree inventory records.
+        selected_tree_ids: Optional exact identifiers restricting portable payloads.
 
     Yields:
         One compressed, checksum-bound Newick payload per selected gene tree.
@@ -273,6 +275,8 @@ def iter_portable_tree_payloads(
         if tree_type not in {"GENE_TREE", "RESOLVED_GENE_TREE"}:
             continue
         tree_id = str(record.get("tree_id", ""))
+        if selected_tree_ids is not None and tree_id not in selected_tree_ids:
+            continue
         authority = (tree_type, tree_id)
         if authority in seen_authorities:
             raise InputValidationError(

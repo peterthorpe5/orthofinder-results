@@ -19,6 +19,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
+from orthofinder_interrogation_app.focus import (
+    FocusProteinAuthority,
+    read_focus_proteins,
+)
+
 from . import __schema_version__, __version__
 from .distances import (
     DISTANCE_FIELDS,
@@ -29,6 +34,12 @@ from .distances import (
     summarise_distances,
 )
 from .errors import DistanceCalculationError, InputValidationError, PublicationError
+from .focus_analysis import (
+    FocusSelection,
+    publish_focus_cluster_results,
+    publish_focus_selection,
+    select_focus_groups,
+)
 from .io_utils import (
     atomic_write_json,
     configure_logging,
@@ -130,6 +141,48 @@ GROUP_TYPES = {
         "population_stddev_distance": "float64",
         "mean_comparable_sites": "float64",
     },
+    "e3_seed_catalogue_audit": {
+        "enabled": "bool",
+        "matched_group_count": "int64",
+        "matched_member_count": "int64",
+        "matched_species_count": "int64",
+        "seed_protein_sequence_length": "int64",
+    },
+    "e3_seed_matches": {
+        "seed_protein_sequence_length": "int64",
+    },
+    "e3_cluster_results": {
+        "member_count": "int64",
+        "species_count": "int64",
+        "single_copy_species_count": "int64",
+        "max_copies_per_species": "int64",
+        "mean_copies_per_species": "float64",
+        "is_singleton": "bool",
+        "matched_seed_count": "int64",
+        "matched_e3_member_count": "int64",
+        "matched_e3_species_count": "int64",
+        "total_member_count": "int64",
+        "sampled_member_count": "int64",
+        "distance_pair_count": "int64",
+        "unresolved_pair_count": "int64",
+        "minimum_distance": "float64",
+        "q05_distance": "float64",
+        "q25_distance": "float64",
+        "median_distance": "float64",
+        "mean_distance": "float64",
+        "q75_distance": "float64",
+        "q95_distance": "float64",
+        "maximum_distance": "float64",
+        "population_stddev_distance": "float64",
+        "mean_comparable_sites": "float64",
+        "distance_sampling_fraction": "float64",
+        "expected_sample_pair_count": "int64",
+        "resolved_pair_fraction": "float64",
+        "full_group_distance_matrix": "bool",
+        "distance_interquartile_range": "float64",
+        "distance_range": "float64",
+        "distance_coefficient_of_variation": "float64",
+    },
 }
 
 
@@ -210,6 +263,9 @@ def run_pipeline(
     force: bool,
     verbose: bool,
     keep_failed_work: bool = False,
+    focus_proteins_path: Path | None = None,
+    focus_group_type: str = "HOG",
+    focus_hierarchy_node: str = "N0",
 ) -> dict[str, Any]:
     """Build a complete versioned result resource without mutating its authority.
 
@@ -234,6 +290,9 @@ def run_pipeline(
         force: Supersede an existing non-matching output.
         verbose: Enable debug logging.
         keep_failed_work: Retain partial staging/copy directories after a failure.
+        focus_proteins_path: Optional E3/focus authority restricting groups and distances.
+        focus_group_type: Exact group collection used for focus selection.
+        focus_hierarchy_node: Exact HOG hierarchy node used for focus selection.
 
     Returns:
         Completed run manifest.
@@ -247,6 +306,7 @@ def run_pipeline(
         run_id=run_id,
         distance_source=distance_source,
         distance_group_type=distance_group_type,
+        distance_hierarchy_node=distance_hierarchy_node,
         distance_max_groups=distance_max_groups,
         distance_max_members=distance_max_members,
         report_max_statistic_rows=report_max_statistic_rows,
@@ -255,6 +315,17 @@ def run_pipeline(
         report_nearest_neighbours=report_nearest_neighbours,
         resume=resume,
         force=force,
+        focus_enabled=focus_proteins_path is not None,
+        focus_group_type=focus_group_type,
+        focus_hierarchy_node=focus_hierarchy_node,
+    )
+    focus_path = (
+        Path(focus_proteins_path).expanduser().resolve()
+        if focus_proteins_path is not None
+        else None
+    )
+    focus_authority = (
+        read_focus_proteins(path=focus_path) if focus_path is not None else None
     )
     layout = discover_layout(results_dir=results_dir)
     output = validate_persistent_path(path=output_dir, role="output_dir")
@@ -280,6 +351,7 @@ def run_pipeline(
     source_inventory = _build_source_inventory(
         layout=layout,
         alignment_dir=resolved_alignment_dir,
+        focus_proteins_path=focus_path,
     )
     _LOGGER.info(
         "Source inventory finished: files=%s, elapsed_seconds=%.3f",
@@ -327,6 +399,10 @@ def run_pipeline(
             started_at=started_at,
             staging_root=staging_root,
             publication_method=publication_method,
+            focus_authority=focus_authority,
+            focus_proteins_path=focus_path,
+            focus_group_type=focus_group_type,
+            focus_hierarchy_node=focus_hierarchy_node,
         )
         # Close the staging file handler before checksums are verified or files
         # cross filesystems. Subsequent CLI messages remain console-only.
@@ -779,8 +855,41 @@ def _build_resource(
     started_at: str,
     staging_root: Path,
     publication_method: str,
+    focus_authority: FocusProteinAuthority | None,
+    focus_proteins_path: Path | None,
+    focus_group_type: str,
+    focus_hierarchy_node: str,
 ) -> dict[str, Any]:
-    """Populate one staging directory and return its complete manifest."""
+    """Populate one staging directory and return its complete manifest.
+
+    Args:
+        staging: Unique incomplete resource directory.
+        layout: Validated completed OrthoFinder layout.
+        run_id: Immutable output run identifier.
+        source_inventory: Checksum-bound input inventory.
+        input_digest: Digest of the complete input inventory.
+        alignment_dir: Optional alignment distance authority.
+        distance_source: Requested distance authority.
+        distance_group_type: Requested distance group collection.
+        distance_hierarchy_node: Exact distance hierarchy node.
+        distance_max_groups: Maximum ordinary-run distance groups; zero is unlimited.
+        distance_max_members: Per-group exact or deterministic member bound.
+        parse_gene_trees: Whether selected gene trees should be normalised.
+        report_max_statistic_rows: Browser-safe group-summary bound.
+        report_max_groups: Browser-safe network-group bound.
+        report_max_members: Browser-safe network-member bound.
+        report_nearest_neighbours: Network neighbour count.
+        started_at: Run start time in UTC.
+        staging_root: Parent temporary directory used for publication metadata.
+        publication_method: Atomic publication strategy.
+        focus_authority: Optional validated E3/focus authority.
+        focus_proteins_path: Physical focus input copied into provenance.
+        focus_group_type: Exact focus group collection.
+        focus_hierarchy_node: Exact focus HOG hierarchy node.
+
+    Returns:
+        Complete resource manifest.
+    """
 
     tables = staging / "tables"
     provenance = staging / "provenance"
@@ -797,6 +906,12 @@ def _build_resource(
             fieldnames=("role", "path", "size_bytes", "sha256"),
             records=source_inventory,
         )
+        if focus_proteins_path is not None:
+            suffix = ".tsv.gz" if focus_proteins_path.name.endswith(".tsv.gz") else ".tsv"
+            shutil.copy2(
+                focus_proteins_path,
+                provenance / f"focus_protein_authority{suffix}",
+            )
         stage["details"] = f"input_files={len(source_inventory)}"
 
     with stages.record(stage="memberships_and_group_statistics") as stage:
@@ -822,6 +937,30 @@ def _build_resource(
             species_from_groups=species_from_groups,
         )
         stage["details"] = f"species={species_count};sequences={sequence_count}"
+    focus_selection: FocusSelection | None = None
+    if focus_authority is not None:
+        with stages.record(stage="e3_focus_selection") as stage:
+            focus_selection = select_focus_groups(
+                tables_dir=tables,
+                run_id=run_id,
+                authority=focus_authority,
+                group_type=focus_group_type,
+                hierarchy_node=focus_hierarchy_node,
+            )
+            if not focus_selection.group_statistics:
+                raise InputValidationError(
+                    "No enabled focus protein matched the selected group collection."
+                )
+            publish_focus_selection(
+                tables_dir=tables,
+                selection=focus_selection,
+            )
+            stage["details"] = (
+                f"authority_records={len(focus_authority.records)};"
+                f"matched_seeds={focus_selection.matched_seed_count};"
+                f"groups={len(focus_selection.group_statistics)};"
+                f"matches={len(focus_selection.match_rows)}"
+            )
     with stages.record(stage="tree_inventory_and_normalisation") as stage:
         (
             tree_inventory,
@@ -833,6 +972,11 @@ def _build_resource(
             layout=layout,
             run_id=run_id,
             parse_gene_trees=parse_gene_trees,
+            selected_gene_tree_ids=(
+                focus_selection.selected_tree_ids
+                if focus_selection is not None
+                else None
+            ),
         )
         stage["details"] = (
             f"tree_files={len(tree_inventory)};portable_trees={tree_payload_count};"
@@ -849,10 +993,34 @@ def _build_resource(
             distance_hierarchy_node=distance_hierarchy_node,
             distance_max_groups=distance_max_groups,
             distance_max_members=distance_max_members,
+            selected_group_keys=(
+                focus_selection.group_keys if focus_selection is not None else None
+            ),
+            required_members_by_group=(
+                focus_selection.required_members_by_group
+                if focus_selection is not None
+                else None
+            ),
         )
         stage["details"] = (
             f"groups={len(distance_summaries)};pairs={distance_count};requested={distance_source}"
         )
+    focus_result_rows: tuple[dict[str, Any], ...] = ()
+    if focus_selection is not None:
+        with stages.record(stage="e3_cluster_results") as stage:
+            focus_result_rows = publish_focus_cluster_results(
+                tables_dir=tables,
+                selection=focus_selection,
+                distance_summaries=distance_summaries,
+            )
+            unavailable = sum(
+                row["computation_status"] == "UNAVAILABLE"
+                for row in focus_result_rows
+            )
+            stage["details"] = (
+                f"groups={len(focus_result_rows)};"
+                f"unavailable_distance_groups={unavailable}"
+            )
 
     with stages.record(stage="parquet_publication") as stage:
         parquet_tables = _publish_parquet(tables_dir=tables)
@@ -912,8 +1080,28 @@ def _build_resource(
             "tree_node_count": tree_node_count,
             "distance_group_count": len(distance_summaries),
             "distance_pair_count": distance_count,
+            "focus_seed_count": (
+                len(focus_authority.records) if focus_authority is not None else 0
+            ),
+            "matched_focus_seed_count": (
+                focus_selection.matched_seed_count
+                if focus_selection is not None
+                else 0
+            ),
+            "focus_group_count": len(focus_result_rows),
         },
     }
+    if focus_selection is not None:
+        run_metadata["focus_analysis"] = {
+            "authority_name": focus_selection.authority.source_name,
+            "authority_sha256": focus_selection.authority.sha256,
+            "group_type": focus_selection.group_type,
+            "hierarchy_node": focus_selection.hierarchy_node,
+            "cluster_results": "tables/e3_cluster_results.tsv.gz",
+            "seed_matches": "tables/e3_seed_matches.tsv.gz",
+            "seed_audit": "tables/e3_seed_catalogue_audit.tsv.gz",
+            "pairwise_distances": "tables/pairwise_distances.tsv.gz",
+        }
     report_path = report_dir / "orthofinder_results_summary.html"
     with stages.record(stage="offline_html_report") as stage:
         build_interactive_report(
@@ -953,6 +1141,9 @@ def _build_resource(
         tree_node_count=tree_node_count,
         distance_count=distance_count,
         offline_report=offline_report,
+        focus_selection=focus_selection,
+        focus_result_rows=focus_result_rows,
+        distance_summaries=distance_summaries,
     )
     with stages.record(stage="quality_control") as stage:
         write_tsv(
@@ -991,6 +1182,15 @@ def _build_resource(
             "tree_edge_count": tree_edge_count,
             "distance_pair_count": distance_count,
             "distance_group_count": len(distance_summaries),
+            "focus_seed_count": (
+                len(focus_authority.records) if focus_authority is not None else 0
+            ),
+            "matched_focus_seed_count": (
+                focus_selection.matched_seed_count
+                if focus_selection is not None
+                else 0
+            ),
+            "focus_group_count": len(focus_result_rows),
         },
         "report_limits": {
             "maximum_statistic_rows": report_max_statistic_rows,
@@ -1244,9 +1444,25 @@ def _publish_identifiers(
 
 
 def _publish_trees(
-    *, tables_dir: Path, layout: ResultLayout, run_id: str, parse_gene_trees: bool
+    *,
+    tables_dir: Path,
+    layout: ResultLayout,
+    run_id: str,
+    parse_gene_trees: bool,
+    selected_gene_tree_ids: frozenset[str] | None = None,
 ) -> tuple[list[dict[str, Any]], int, int, int]:
-    """Publish tree file provenance and optional normalised nodes and edges."""
+    """Publish tree provenance and optional selected portable representations.
+
+    Args:
+        tables_dir: Analytical output directory.
+        layout: Validated completed OrthoFinder layout.
+        run_id: Immutable resource run identifier.
+        parse_gene_trees: Whether gene-tree nodes and edges should be normalised.
+        selected_gene_tree_ids: Optional exact focus-related tree identifiers.
+
+    Returns:
+        Inventory plus portable payload, node and edge counts.
+    """
 
     _LOGGER.info("Tree checksum inventory started.")
     inventory_started = time.perf_counter()
@@ -1268,6 +1484,7 @@ def _publish_trees(
             layout=layout,
             run_id=run_id,
             inventory=inventory,
+            selected_tree_ids=selected_gene_tree_ids,
         ),
     )
     _LOGGER.info("Portable tree publication finished: trees=%s", f"{payload_count:,}")
@@ -1294,6 +1511,12 @@ def _publish_trees(
         for record in inventory:
             if record["tree_type"] != "SPECIES_TREE" and not parse_gene_trees:
                 continue
+            if (
+                record["tree_type"] != "SPECIES_TREE"
+                and selected_gene_tree_ids is not None
+                and str(record["tree_id"]) not in selected_gene_tree_ids
+            ):
+                continue
             source = layout.results_dir / str(record["path"])
             nodes, edges = normalise_newick_tree(
                 path=source,
@@ -1319,8 +1542,27 @@ def _publish_distances(
     distance_hierarchy_node: str,
     distance_max_groups: int,
     distance_max_members: int,
+    selected_group_keys: frozenset[str] | None = None,
+    required_members_by_group: Mapping[str, tuple[str, ...]] | None = None,
 ) -> tuple[int, list[dict[str, Any]]]:
-    """Publish optional aligned-sequence or resolved-tree distances."""
+    """Publish optional aligned-sequence or resolved-tree distances.
+
+    Args:
+        tables_dir: Analytical output directory.
+        layout: Validated completed OrthoFinder layout.
+        run_id: Immutable resource run identifier.
+        alignment_dir: Optional aligned-sequence authority.
+        distance_source: Requested distance authority.
+        distance_group_type: Requested distance group collection.
+        distance_hierarchy_node: Exact HOG hierarchy node.
+        distance_max_groups: Maximum groups for ordinary runs; zero is unlimited.
+        distance_max_members: Per-group member bound.
+        selected_group_keys: Optional exact focus-selected group keys.
+        required_members_by_group: Focus members that bounded samples must retain.
+
+    Returns:
+        Pairwise row count and one summary per attempted group.
+    """
 
     resolved_group_type = (
         ("HOG" if layout.primary_group_authority == "HOG" else "LEGACY_ORTHOGROUP")
@@ -1332,6 +1574,18 @@ def _publish_distances(
         alignment_dir=alignment_dir,
         resolved_tree_dir=layout.resolved_gene_trees_dir,
     )
+    oversized_required = sorted(
+        (key, len(members))
+        for key, members in (required_members_by_group or {}).items()
+        if len(members) > distance_max_members
+    )
+    if oversized_required:
+        key, count = oversized_required[0]
+        raise InputValidationError(
+            f"Focus group {key} contains {count:,} matched focus members, exceeding "
+            f"distance_max_members={distance_max_members:,}. Increase the member bound "
+            "so every focus member remains in the deterministic matrix."
+        )
     summaries: list[dict[str, Any]] = []
     pair_count = 0
     with open_text(
@@ -1355,6 +1609,8 @@ def _publish_distances(
                 hierarchy_node=distance_hierarchy_node,
                 maximum_groups=distance_max_groups,
                 maximum_members=distance_max_members,
+                selected_group_keys=selected_group_keys,
+                required_members_by_group=required_members_by_group,
             )
         elif resolved_source == "RESOLVED_GENE_TREE":
             pair_count = _write_tree_distances(
@@ -1367,6 +1623,8 @@ def _publish_distances(
                 hierarchy_node=distance_hierarchy_node,
                 maximum_groups=distance_max_groups,
                 maximum_members=distance_max_members,
+                selected_group_keys=selected_group_keys,
+                required_members_by_group=required_members_by_group,
             )
     write_tsv(
         path=_table_path(tables_dir=tables_dir, relation="distance_statistics"),
@@ -1386,17 +1644,59 @@ def _write_alignment_distances(
     hierarchy_node: str,
     maximum_groups: int,
     maximum_members: int,
+    selected_group_keys: frozenset[str] | None = None,
+    required_members_by_group: Mapping[str, tuple[str, ...]] | None = None,
 ) -> int:
-    """Write selected aligned-sequence distances and return their pair count."""
+    """Write selected aligned-sequence distances and return their pair count.
+
+    Args:
+        writer: Open pairwise-distance TSV writer.
+        summaries: Mutable distance-summary sink.
+        alignment_dir: Required aligned FASTA directory.
+        run_id: Immutable resource run identifier.
+        group_type: Exact distance group collection.
+        hierarchy_node: Exact HOG hierarchy node.
+        maximum_groups: Maximum ordinary-run groups; zero is unlimited.
+        maximum_members: Per-group member calculation bound.
+        selected_group_keys: Optional exact focus-selected groups.
+        required_members_by_group: Focus members retained in bounded samples.
+
+    Returns:
+        Published pairwise-distance row count.
+    """
 
     if alignment_dir is None:  # pragma: no cover - guarded by source resolution
         raise AssertionError("Aligned-sequence distance source lacks an alignment directory.")
     paths = _alignment_paths(directory=alignment_dir)
-    if maximum_groups:
+    if selected_group_keys is not None:
+        paths = [
+            path
+            for path in paths
+            if _group_key(
+                {
+                    "group_type": group_type,
+                    "hierarchy_node": hierarchy_node if group_type == "HOG" else "",
+                    "group_id": _group_id_from_alignment(path=path),
+                }
+            )
+            in selected_group_keys
+        ]
+    if maximum_groups and selected_group_keys is not None and len(paths) > maximum_groups:
+        raise InputValidationError(
+            "Focus selection exceeds distance_max_groups; focus runs are never truncated."
+        )
+    if maximum_groups and selected_group_keys is None:
         paths = paths[:maximum_groups]
     pair_count = 0
     for index, path in enumerate(paths, start=1):
         group_id = _group_id_from_alignment(path=path)
+        key = _group_key(
+            {
+                "group_type": group_type,
+                "hierarchy_node": hierarchy_node if group_type == "HOG" else "",
+                "group_id": group_id,
+            }
+        )
         group_started = time.perf_counter()
         _LOGGER.info(
             "Distance group started: %s/%s, group=%s, source=alignment",
@@ -1411,6 +1711,7 @@ def _write_alignment_distances(
             hierarchy_node=hierarchy_node if group_type == "HOG" else "",
             group_id=group_id,
             max_members=maximum_members,
+            required_member_ids=(required_members_by_group or {}).get(key, ()),
             source_file=str(path),
         )
         writer.writerows(rows)
@@ -1442,8 +1743,27 @@ def _write_tree_distances(
     hierarchy_node: str,
     maximum_groups: int,
     maximum_members: int,
+    selected_group_keys: frozenset[str] | None = None,
+    required_members_by_group: Mapping[str, tuple[str, ...]] | None = None,
 ) -> int:
-    """Write selected HOG/orthogroup patristic distances and summaries."""
+    """Write selected HOG/orthogroup patristic distances and summaries.
+
+    Args:
+        writer: Open pairwise-distance TSV writer.
+        summaries: Mutable distance-summary sink.
+        tables_dir: Published analytical TSV directory.
+        layout: Validated completed OrthoFinder layout.
+        run_id: Immutable resource run identifier.
+        group_type: Exact distance group collection.
+        hierarchy_node: Exact HOG hierarchy node.
+        maximum_groups: Maximum ordinary-run groups; zero is unlimited.
+        maximum_members: Per-group member calculation bound.
+        selected_group_keys: Optional exact focus-selected groups.
+        required_members_by_group: Focus members retained in bounded samples.
+
+    Returns:
+        Published pairwise-distance row count.
+    """
 
     tree_dir = layout.resolved_gene_trees_dir
     if tree_dir is None:  # pragma: no cover - guarded by source resolution
@@ -1455,10 +1775,25 @@ def _write_tree_distances(
         )
         if row["group_type"] == group_type
         and (group_type != "HOG" or row["hierarchy_node"] == hierarchy_node)
-        and int(row["member_count"]) >= 2
+        and (
+            selected_group_keys is not None
+            or int(row["member_count"]) >= 2
+        )
+        and (
+            selected_group_keys is None
+            or _group_key(row) in selected_group_keys
+        )
     ]
     statistics.sort(key=lambda row: (-int(row["member_count"]), row["group_id"]))
-    if maximum_groups:
+    if (
+        maximum_groups
+        and selected_group_keys is not None
+        and len(statistics) > maximum_groups
+    ):
+        raise InputValidationError(
+            "Focus selection exceeds distance_max_groups; focus runs are never truncated."
+        )
+    if maximum_groups and selected_group_keys is None:
         statistics = statistics[:maximum_groups]
     selected_keys = {_group_key(row) for row in statistics}
     membership_path = _table_path(
@@ -1505,6 +1840,26 @@ def _write_tree_distances(
         )
         species_by_member = species_by_member_by_key.get(key, {})
         members = tuple(sorted(species_by_member))
+        if len(members) < 2:
+            summaries.append(
+                _unavailable_distance_summary(
+                    run_id=run_id,
+                    group_type=group_type,
+                    hierarchy_node=hierarchy_node if group_type == "HOG" else "",
+                    group_id=group_id,
+                    member_count=len(members),
+                    reason="The selected group contains fewer than two members.",
+                )
+            )
+            _LOGGER.info(
+                "Distance group finished: %s/%s, group=%s, status=UNAVAILABLE, "
+                "reason=fewer_than_two_members, elapsed_seconds=%.3f",
+                index,
+                len(statistics),
+                group_id,
+                time.perf_counter() - group_started,
+            )
+            continue
         tree_candidates = (
             statistic.get("legacy_orthogroup_id", ""),
             group_id,
@@ -1588,6 +1943,7 @@ def _write_tree_distances(
                 max_members=maximum_members,
                 member_ids=members,
                 member_aliases=member_aliases,
+                required_member_ids=(required_members_by_group or {}).get(key, ()),
                 source_file=str(tree_path),
             )
         except DistanceCalculationError as error:
@@ -2251,9 +2607,21 @@ class _HashRowSampler:
 
 
 def _build_source_inventory(
-    *, layout: ResultLayout, alignment_dir: Path | None
+    *,
+    layout: ResultLayout,
+    alignment_dir: Path | None,
+    focus_proteins_path: Path | None = None,
 ) -> list[dict[str, Any]]:
-    """Checksum every source that can alter the requested analytical result."""
+    """Checksum every source that can alter the requested analytical result.
+
+    Args:
+        layout: Validated completed OrthoFinder layout.
+        alignment_dir: Optional alignment authority.
+        focus_proteins_path: Optional E3/focus selection authority.
+
+    Returns:
+        Complete input file inventory in deterministic role/path order.
+    """
 
     roles: list[tuple[str, Path]] = [("orthofinder_log", layout.log_path)]
     for role, path in (
@@ -2277,6 +2645,8 @@ def _build_source_inventory(
             )
     if alignment_dir is not None:
         roles.extend(("alignment", path) for path in _alignment_paths(directory=alignment_dir))
+    if focus_proteins_path is not None:
+        roles.append(("focus_protein_authority", focus_proteins_path))
     records = []
     for role, path in roles:
         record = file_record(path=path)
@@ -2431,10 +2801,32 @@ def _qc_rows(
     tree_node_count: int,
     distance_count: int,
     offline_report: bool,
+    focus_selection: FocusSelection | None = None,
+    focus_result_rows: Sequence[Mapping[str, Any]] = (),
+    distance_summaries: Sequence[Mapping[str, Any]] = (),
 ) -> list[dict[str, Any]]:
-    """Build explicit run validation checks."""
+    """Build explicit run validation checks.
 
-    return [
+    Args:
+        layout: Validated source layout.
+        membership_counts: Published membership counts by authority.
+        group_count: Published group-statistics row count.
+        species_count: Published species count.
+        sequence_count: Published sequence-identifier count.
+        tree_inventory_count: Checksum-inventoried tree count.
+        tree_payload_count: Portable selected gene-tree count.
+        tree_node_count: Normalised selected tree-node count.
+        distance_count: Published pairwise-distance count.
+        offline_report: Whether the report contains no HTTP dependencies.
+        focus_selection: Optional complete E3/focus selection.
+        focus_result_rows: Flat selected-cluster result rows.
+        distance_summaries: Explicit selected distance summaries.
+
+    Returns:
+        Required validation rows, including focus reconciliation when enabled.
+    """
+
+    rows = [
         _qc(
             "supported_adapter",
             layout.adapter_name in {"orthofinder_2", "orthofinder_3"},
@@ -2511,6 +2903,43 @@ def _qc_rows(
             "The HTML report must not depend on HTTP resources.",
         ),
     ]
+    if focus_selection is not None:
+        selected_count = len(focus_selection.group_statistics)
+        summary_keys = {_group_key(row) for row in distance_summaries}
+        rows.extend(
+            (
+                _qc(
+                    "focus_seed_matches_present",
+                    focus_selection.matched_seed_count > 0,
+                    focus_selection.matched_seed_count,
+                    ">0",
+                    "At least one enabled E3/focus seed must match exactly.",
+                ),
+                _qc(
+                    "focus_seed_audit_complete",
+                    len(focus_selection.audit_rows)
+                    == len(focus_selection.authority.records),
+                    len(focus_selection.audit_rows),
+                    len(focus_selection.authority.records),
+                    "Every configured seed has a matched, unmatched or disabled audit row.",
+                ),
+                _qc(
+                    "focus_cluster_export_complete",
+                    len(focus_result_rows) == selected_count,
+                    len(focus_result_rows),
+                    selected_count,
+                    "The compressed cluster result contains every matched focus group.",
+                ),
+                _qc(
+                    "focus_distance_summary_complete",
+                    focus_selection.group_keys.issubset(summary_keys),
+                    len(focus_selection.group_keys.intersection(summary_keys)),
+                    selected_count,
+                    "Every focus group has an explicit distance result or reason.",
+                ),
+            )
+        )
+    return rows
 
 
 def _qc(name: str, passed: bool, observed: Any, expected: Any, details: str) -> dict[str, Any]:
@@ -2538,8 +2967,33 @@ def _validate_controls(
     report_nearest_neighbours: int,
     resume: bool,
     force: bool,
+    focus_enabled: bool = False,
+    focus_group_type: str = "HOG",
+    focus_hierarchy_node: str = "N0",
+    distance_hierarchy_node: str = "N0",
 ) -> None:
-    """Validate named execution controls before filesystem mutation."""
+    """Validate named execution controls before filesystem mutation.
+
+    Args:
+        run_id: Immutable output run identifier.
+        distance_source: Requested distance authority.
+        distance_group_type: Requested distance group collection.
+        distance_max_groups: Maximum ordinary-run groups or zero for unlimited.
+        distance_max_members: Per-group member calculation bound.
+        report_max_statistic_rows: Browser-safe summary-row bound.
+        report_max_groups: Browser-safe network-group bound.
+        report_max_members: Browser-safe network-member bound.
+        report_nearest_neighbours: Retained neighbour count.
+        resume: Whether an exact completed output may be reused.
+        force: Whether an existing output may be superseded.
+        focus_enabled: Whether the run is restricted to a focus authority.
+        focus_group_type: Exact focus group collection.
+        focus_hierarchy_node: Exact focus hierarchy node.
+        distance_hierarchy_node: Exact distance hierarchy node.
+
+    Raises:
+        InputValidationError: If any controls are unsafe or inconsistent.
+    """
 
     if _RUN_ID_PATTERN.fullmatch(run_id) is None:
         raise InputValidationError(
@@ -2555,6 +3009,30 @@ def _validate_controls(
         raise InputValidationError(f"Unsupported distance_source: {distance_source}")
     if distance_group_type not in {"AUTO", "HOG", "LEGACY_ORTHOGROUP"}:
         raise InputValidationError(f"Unsupported distance_group_type: {distance_group_type}")
+    if focus_enabled:
+        if distance_source != "RESOLVED_GENE_TREE":
+            raise InputValidationError(
+                "Focus precursor runs require RESOLVED_GENE_TREE distances."
+            )
+        if focus_group_type not in {"HOG", "LEGACY_ORTHOGROUP"}:
+            raise InputValidationError(
+                f"Unsupported focus_group_type: {focus_group_type}"
+            )
+        if focus_group_type == "LEGACY_ORTHOGROUP" and focus_hierarchy_node:
+            raise InputValidationError(
+                "Legacy focus runs require an empty ROOT hierarchy node."
+            )
+        resolved_distance_type = (
+            focus_group_type if distance_group_type == "AUTO" else distance_group_type
+        )
+        if resolved_distance_type != focus_group_type:
+            raise InputValidationError(
+                "Focus and distance group types must identify the same collection."
+            )
+        if distance_hierarchy_node != focus_hierarchy_node:
+            raise InputValidationError(
+                "Focus and distance hierarchy nodes must be identical."
+            )
     _validate_report_controls(
         report_max_statistic_rows=report_max_statistic_rows,
         report_max_groups=report_max_groups,

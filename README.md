@@ -38,6 +38,8 @@ Each successful run creates one immutable output directory containing:
   allowing later bounded distance calculations without access to the original run;
 - a normalised species tree, and optionally every gene tree, as node/edge tables;
 - optional aligned-sequence pairwise distances and per-cluster distributions;
+- optional exact E3/focus selection, seed audit and one-row-per-cluster
+  compressed result authority;
 - matching gzip-compressed TSV and typed Parquet tables;
 - a physical, portable DuckDB containing the same analytical relations;
 - explicit QC checks, a complete run manifest and a persistent run log; and
@@ -146,9 +148,39 @@ python -m pip install --editable '.[app,dev]'
 The `app` extra installs the independent Streamlit viewer. It is not required
 when the package is used only to build resources on a cluster.
 
+## Complete E3 precursor resource
+
+Version 0.8.0 adds a dedicated cluster action for the downstream E3 and motif
+workflow. It matches the packaged or user-supplied focus authority exactly to
+`HOG` groups at `N0`, calculates resolved-gene-tree patristic distances for
+every matching cluster, and publishes an analysis-ready compressed table:
+
+```bash
+orthofinder-results \
+  --action e3-precursor \
+  --results-dir /path/to/completed/OrthoFinder/results \
+  --output-dir /path/to/new/e3_resource \
+  --run-id my_orthofinder_e3_run \
+  --work-dir "${TMPDIR}/orthofinder_e3_work" \
+  --distance-max-members 250
+```
+
+`tables/e3_cluster_results.tsv.gz` has one row for every matched cluster and
+includes matched seed identities plus minimum, quartiles, median, mean,
+population SD and maximum distances, calculation scope and provenance. The
+companion `tables/pairwise_distances.tsv.gz` retains every calculated pair;
+`e3_seed_catalogue_audit.tsv.gz` retains matched and unmatched seeds. Missing
+distance calculations remain explicit `UNAVAILABLE` rows with blank statistics.
+
+For Slurm, [`slurm/e3_precursor.sbatch`](slurm/e3_precursor.sbatch) requires a
+scheduler-provided `TMPDIR`, stages source reads and initial output there, then
+checksum-compares a hidden persistent copy before a locked atomic rename. See
+the [complete E3 precursor guide](docs/e3_precursor.md) for the exact contract,
+outputs and downstream parsing guidance.
+
 ## Interactive application
 
-Version 0.7.0 provides the read-only standalone application. It opens either a
+Version 0.8.0 provides the read-only standalone application. It opens either a
 completed resource directory or its `duckdb/orthofinder_results.duckdb` file:
 
 ```bash
@@ -178,9 +210,13 @@ a completed resource.
 
 The packaged focus authority lives in
 [`src/orthofinder_interrogation_app/data`](src/orthofinder_interrogation_app/data).
-It contains 43,066 E3 seed accessions with category, evidence, organism and
-source provenance. Copy and edit `custom_focus_proteins.template.tsv`, then use
-the replacement without changing code:
+The default is the exact 1,000-record `e3_seed_catalogue.tsv` supplied for the
+current project, with seed identifiers, associated category/organism metadata,
+review state and sequence provenance. Its checksum is documented beside the
+file. The previous broader 43,066-record authority remains packaged for
+reproducibility but is not selected implicitly. Copy and edit
+`custom_focus_proteins.template.tsv`, then use the replacement without changing
+code:
 
 ```bash
 orthofinder-interrogation-app \
@@ -197,8 +233,8 @@ The application provides:
 
 - a guided Summary landing page organised around biological questions, with
   contextual help, readable table headings and an expandable scientific glossary;
-- a **Focus protein clusters** page that starts from the packaged 43,066-record
-  E3 seed authority, reports exact matched accessions and cluster membership,
+- a **Focus protein clusters** page that starts from the packaged 1,000-record
+  E3 seed catalogue, reports exact matched accessions and cluster membership,
   and accepts a replacement TSV without code changes;
 - a dedicated gene/protein search across canonical membership identifiers and
   available OrthoFinder internal IDs, returning every matching HOG level and flat
@@ -288,12 +324,15 @@ orthofinder-interrogation-app \
 ```
 
 [`examples/results_feb26_ncbi_taxonomy_mapping_20260907.tsv`](examples/results_feb26_ncbi_taxonomy_mapping_20260907.tsv)
-is a 60-label example for the `Results_Feb26` resource, not an application
-species list. It was resolved against the official NCBI `taxdump.tar.gz`
-snapshot published on 7 September 2026. It contains 59 reviewed unique
-exact-name matches and deliberately retains `Leismania_major` as `UNMAPPED`;
-confirm and document that apparent workflow misspelling against the original
-FASTA provenance before changing its status.
+is the audited 60-label mapping for the `Results_Feb26` resource. An identical
+packaged copy is the application's conditional default: it is selected only
+when all 60 exact resource labels match, so it can never leak into another
+dataset. It was resolved against the official NCBI `taxdump.tar.gz` snapshot
+published on 7 September 2026. It contains 59 reviewed unique exact-name
+matches and deliberately retains `Leismania_major` as `UNMAPPED`; confirm and
+document that apparent workflow misspelling against the original FASTA
+provenance before changing its status. Other datasets receive their own
+label-derived review template and must supply a reviewed mapping.
 
 Taxon-ID/descendant searches use only `REVIEWED` rows and provide four explicit
 semantics:
@@ -438,12 +477,15 @@ aliases. The recorded `member_identifier_resolution` reports which mapping was
 used. Missing, duplicate and ambiguous mappings fail that cluster explicitly;
 the package never strips prefixes heuristically.
 
-Regardless of the precomputed distance-group bound, schema 3 publishes the
-checksum-verified preferred gene trees as compressed portable payloads. Keeping
-`--distance-max-groups 25` therefore preserves a fast opening pilot while the
-app can calculate other selected groups lazily. Do not set the bound to zero
-merely to support the app: on a large run that would attempt every eligible pair
-matrix and can be computationally and spatially prohibitive.
+For an ordinary complete run, schema 3 publishes checksum-verified preferred
+gene trees as compressed portable payloads regardless of the precomputed
+distance-group bound. Keeping `--distance-max-groups 25` therefore preserves a
+fast opening pilot while the app can calculate other selected groups lazily.
+The dedicated E3 precursor is different: it publishes the portable trees and
+distance matrices for every focus-matched group, while omitting unrelated tree
+payloads. Do not set the ordinary run bound to zero merely to support the app:
+on a large run that would attempt every eligible pair matrix and can be
+computationally and spatially prohibitive.
 
 Use `--parse-gene-trees` only when normalised nodes and edges for every gene
 tree are required. Tree files are checksum-inventoried even when their nodes
@@ -521,9 +563,10 @@ files, which is suitable for `mosh` sessions:
 
 The wrapper prints the job identifier, exact output/error log paths and the
 `squeue` command. Unless `--work-dir` is explicitly supplied, each Slurm job
-uses a private directory below `${TMPDIR}`, falling back to node-local `/tmp`
-when that variable is unavailable. Only a completed, checksum-verified result
-is copied to `--output-dir`. The Dundee launcher defaults to the `barton`
+uses a private directory below `${TMPDIR}`. The dedicated E3 and selection-
+coverage wrappers fail closed if the scheduler did not provide this variable;
+they never substitute a Mac or cluster `/tmp` path. Only a completed, checksum-
+verified result is copied to `--output-dir`. The Dundee launcher defaults to the `barton`
 account and partition, requests ordinary resources, and does not select a
 long-duration QoS. An explicit `--work-dir` remains available for clusters
 with a different scratch policy.
@@ -570,16 +613,17 @@ Open the database with:
 duckdb /path/to/output/duckdb/orthofinder_results.duckdb
 ```
 
-## Scope of version 0.7.0
+## Scope of version 0.8.0
 
-Version 0.7.0 adds a replaceable protein-focus authority and a reproducible
-taxonomy selection/coverage tree to the v0.6 protein-centred, distance and
-visualisation foundation. The E3 seed list is the current project default, but
-the selection, mapping, group and tree engines remain generic. The standalone
-app owns OrthoFinder group membership, copy number, species breadth, reviewed
-taxonomy, distances, compactness, trees and within-run comparison. Explicit
-nested-HOG interrogation and cross-run cluster lineage (stable overlap scores
-plus split/merge classification) remain later, separately tested generic layers.
+Version 0.8.0 adds complete E3-focused cluster publication to the v0.7
+replaceable authority and taxonomy selection/coverage foundation. The exact
+1,000-record E3 seed catalogue is the current project default, but users can
+replace it and the underlying identifier, membership, distance and tree engines
+remain generic. The standalone app owns OrthoFinder group membership, copy
+number, species breadth, reviewed taxonomy, distances, compactness, trees and
+within-run comparison. Explicit nested-HOG interrogation and cross-run cluster
+lineage (stable overlap scores plus split/merge classification) remain later,
+separately tested generic layers.
 
 The dataset-wide page deliberately reports persisted resource results only. It
 does not silently mix calculations from a user's mutable on-demand sidecar into

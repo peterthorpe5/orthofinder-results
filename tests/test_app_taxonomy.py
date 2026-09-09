@@ -20,12 +20,15 @@ from orthofinder_interrogation_app.taxonomy import (
     TAXONOMY_COLUMNS,
     add_fisher_enrichment,
     benjamini_hochberg,
+    bundled_taxonomy_path,
     parse_taxonomy_mapping,
+    read_matching_bundled_taxonomy,
     read_taxonomy_mapping,
     taxonomy_audit_rows,
     taxonomy_template,
     taxonomy_template_rows,
 )
+from orthofinder_interrogation_app.taxonomy_selection import build_taxonomy_graph
 from orthofinder_results.errors import InputValidationError
 
 
@@ -386,3 +389,46 @@ def test_results_feb26_example_mapping_is_complete_and_auditable() -> None:
     }
     assert authority.unresolved_species == ("Leismania_major",)
     assert len(authority.target_species(taxon_id=33208)) == 25
+    packaged = bundled_taxonomy_path()
+    assert packaged.read_bytes() == path.read_bytes()
+    selected = read_matching_bundled_taxonomy(expected_species=expected)
+    assert selected is not None
+    assert selected.summary() == authority.summary()
+    graph = build_taxonomy_graph(authority=selected)
+    assert graph.represented_taxon_ids == frozenset(
+        str(record.ncbi_taxon_id)
+        for record in selected.records
+        if record.mapping_status == "REVIEWED"
+    )
+    mismatched = (*expected[:-1], "Different_species")
+    assert read_matching_bundled_taxonomy(expected_species=mismatched) is None
+
+
+@pytest.mark.parametrize(
+    "expected_species",
+    (("Species_A", "Species_A"), ("Species_A", "")),
+)
+def test_bundled_taxonomy_rejects_invalid_resource_species(
+    expected_species: tuple[str, ...],
+) -> None:
+    """Conditional defaults fail closed for duplicate or empty resource labels."""
+
+    with pytest.raises(InputValidationError, match="unique and non-empty"):
+        read_matching_bundled_taxonomy(expected_species=expected_species)
+
+
+def test_bundled_taxonomy_reports_missing_or_malformed_package_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A damaged installed default produces a controlled validation error."""
+
+    monkeypatch.setattr(taxonomy, "files", lambda package: tmp_path)
+    with pytest.raises(InputValidationError, match="mapping is unavailable"):
+        bundled_taxonomy_path()
+
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / taxonomy.DEFAULT_TAXONOMY_FILENAME).write_bytes(b"\xff")
+    with pytest.raises(InputValidationError, match="could not be read"):
+        read_matching_bundled_taxonomy(expected_species=("Species_A",))

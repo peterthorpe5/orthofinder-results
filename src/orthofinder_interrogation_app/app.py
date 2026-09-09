@@ -399,57 +399,87 @@ def _render_overview(*, service: OrthoFinderQueryService) -> None:
         "Use the packaged, versioned E3 seed authority by default, or substitute a reviewed "
         "custom protein list. Matching clusters retain the full distance and visual suite."
     )
-    if st.button("Find E3 focus clusters", key="summary_focus_clusters", type="primary"):
-        _navigate_to(page="Focus protein clusters")
+    st.button(
+        "Find E3 focus clusters",
+        key="summary_focus_clusters",
+        type="primary",
+        on_click=_navigate_to,
+        kwargs={"page": "Focus protein clusters"},
+    )
     actions = st.columns(3)
     actions[0].markdown("#### Which cluster contains my protein?")
     actions[0].write(
         "Find an exact protein or internal ID, then inspect its cluster and distances."
     )
-    if actions[0].button("Find a gene or protein", key="summary_find_protein"):
-        _navigate_to(page="Find a protein")
+    actions[0].button(
+        "Find a gene or protein",
+        key="summary_find_protein",
+        on_click=_navigate_to,
+        kwargs={"page": "Find a protein"},
+    )
     actions[1].markdown("#### Which groups contain my species?")
     actions[1].write(
         "Require one, every, or exactly a set of sampled species, and reject unwanted species."
     )
-    if actions[1].button("Find groups", key="summary_find_groups"):
-        _navigate_to(page="Find groups")
+    actions[1].button(
+        "Find groups",
+        key="summary_find_groups",
+        on_click=_navigate_to,
+        kwargs={"page": "Find groups"},
+    )
     actions[2].markdown("#### How compact or dispersed is one group?")
     actions[2].write(
         "Inspect exact distances, distributions, PCoA, a gene-tree phylogram and networks."
     )
-    if actions[2].button("Explore one cluster", key="summary_explore"):
-        _navigate_to(page="Cluster explorer")
+    actions[2].button(
+        "Explore one cluster",
+        key="summary_explore",
+        on_click=_navigate_to,
+        kwargs={"page": "Cluster explorer"},
+    )
     more_actions = st.columns(3)
     more_actions[0].markdown("#### Which groups focus on a lineage?")
     more_actions[0].write(
         "Search reviewed taxonomic descendants using contains, enrichment or exclusivity."
     )
-    if more_actions[0].button("Search taxonomy", key="summary_taxonomy"):
-        _navigate_to(page="Taxonomic search")
+    more_actions[0].button(
+        "Search taxonomy",
+        key="summary_taxonomy",
+        on_click=_navigate_to,
+        kwargs={"page": "Taxonomic search"},
+    )
     more_actions[1].markdown("#### How do candidate groups differ?")
     more_actions[1].write(
         "Collect 2–12 groups and compare distance spread, compactness and PCoA shape."
     )
-    if more_actions[1].button("Compare clusters", key="summary_compare"):
-        _navigate_to(page="Compare clusters")
+    more_actions[1].button(
+        "Compare clusters",
+        key="summary_compare",
+        on_click=_navigate_to,
+        kwargs={"page": "Compare clusters"},
+    )
     more_actions[2].markdown("#### Which clusters have distance results?")
     more_actions[2].write(
         "Select columns and export every persisted cluster-distance summary in one table."
     )
-    if more_actions[2].button("All distance results", key="summary_all_results"):
-        _navigate_to(page="All distance results")
+    more_actions[2].button(
+        "All distance results",
+        key="summary_all_results",
+        on_click=_navigate_to,
+        kwargs={"page": "All distance results"},
+    )
     coverage_action = st.columns(3)
     coverage_action[0].markdown("#### How does a combined taxonomy selection behave?")
     coverage_action[0].write(
         "Build a reviewed selection/coverage tree and audit exact, include, only and "
         "exclusion predicates across E3-focus clusters by default."
     )
-    if coverage_action[0].button(
+    coverage_action[0].button(
         "Build selection coverage tree",
         key="summary_coverage_tree",
-    ):
-        _navigate_to(page="Selection coverage tree")
+        on_click=_navigate_to,
+        kwargs={"page": "Selection coverage tree"},
+    )
 
     with st.expander("Detailed group collections and hierarchy levels", expanded=False):
         st.write(
@@ -679,10 +709,12 @@ def _render_group_search(*, service: OrthoFinderQueryService) -> None:
     selected_label = st.selectbox("Selected matching group", tuple(labels_to_keys))
     selected_key = labels_to_keys[selected_label]
     actions = st.columns(2)
-    if actions[0].button("Explore selected cluster", type="primary"):
-        _store_active_group(key=selected_key)
-        st.session_state["app_page"] = "Cluster explorer"
-        st.rerun()
+    actions[0].button(
+        "Explore selected cluster",
+        type="primary",
+        on_click=_open_group_in_explorer,
+        kwargs={"key": selected_key},
+    )
     basket = _comparison_keys()
     if actions[1].button(
         "Add selected group to comparison",
@@ -848,7 +880,9 @@ def _render_help() -> None:
                persisted distance summary as formatted Excel or TSV.
 
             **Taxonomic search** is a separate, stricter workflow because descendant claims
-            require a reviewed species-to-taxonomy mapping.
+            require a reviewed species-to-taxonomy mapping. The packaged Results_Feb26
+            authority is used only when all 60 exact labels match; every other dataset gets
+            its own downloadable review template.
             """
         )
     with st.expander("Groups, HOGs and species-tree levels"):
@@ -1050,12 +1084,29 @@ def _column_config(*, descriptions: Mapping[str, str]) -> dict[str, Any]:
 
 
 def _navigate_to(*, page: str) -> None:
-    """Set one validated internal page and immediately rerun the application."""
+    """Set one validated page from a Streamlit widget callback.
+
+    Args:
+        page: Exact internal page identifier.
+
+    Raises:
+        ValueError: If the page is not registered by the application.
+    """
 
     if page not in _PAGES:
         raise ValueError(f"Unknown application page: {page}")
     st.session_state["app_page"] = page
-    st.rerun()
+
+
+def _open_group_in_explorer(*, key: GroupKey) -> None:
+    """Store one selected group and navigate from a widget callback.
+
+    Args:
+        key: Collision-safe selected group key.
+    """
+
+    _store_active_group(key=key)
+    _navigate_to(page="Cluster explorer")
 
 
 def _row_group_key(*, row: dict[str, Any]) -> GroupKey:

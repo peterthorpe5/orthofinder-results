@@ -11,6 +11,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ from orthofinder_results.errors import InputValidationError
 
 _LOGGER = logging.getLogger("orthofinder_interrogation_app.taxonomy")
 MAX_TAXONOMY_BYTES = 5 * 1024 * 1024
+DEFAULT_TAXONOMY_FILENAME = "results_feb26_ncbi_taxonomy_mapping_20260907.tsv"
 MAPPING_STATUSES = frozenset(
     {"REVIEWED", "PENDING_REVIEW", "UNMAPPED", "AMBIGUOUS"}
 )
@@ -51,6 +53,31 @@ EXTENDED_TAXONOMY_COLUMNS = (
     "role",
 )
 TAXONOMY_COLUMNS = (*CORE_TAXONOMY_COLUMNS, *EXTENDED_TAXONOMY_COLUMNS)
+TAXONOMY_TEMPLATE_HELP = {
+    "workflow_species_label": "Exact species label used by this OrthoFinder resource.",
+    "source_species_name": "Species text proposed only for manual review.",
+    "accepted_species_name": "Human-reviewed accepted scientific name.",
+    "ncbi_taxon_id": "Human-reviewed positive NCBI taxonomy identifier for the species.",
+    "parent_taxon_id": "NCBI taxonomy identifier of the accepted immediate parent.",
+    "parent_taxon_name": "Accepted name of the immediate parent taxon.",
+    "lineage_taxon_ids": "Semicolon-separated ordered lineage taxonomy identifiers.",
+    "lineage_names": "Semicolon-separated lineage names ordered like the lineage IDs.",
+    "mapping_status": "REVIEWED, PENDING_REVIEW, UNMAPPED or AMBIGUOUS.",
+    "mapping_method": "Method used to propose or confirm this mapping.",
+    "mapping_source": "Authoritative taxonomy source or database.",
+    "source_date": "Date on which the mapping source was accessed.",
+    "source_version": "Version or release identifier of the taxonomy source.",
+    "reviewed_by": "Person who accepted the mapping.",
+    "reviewed_at_utc": "UTC date and time at which the mapping was accepted.",
+    "review_note": "Free-text rationale, ambiguity or review action.",
+    "lineage_ranks": "Semicolon-separated lineage ranks ordered like the lineage IDs.",
+    "taxon_rank": "Reviewed rank of the accepted terminal taxon.",
+    "taxonomy_authority": "Stable taxonomy authority name, normally NCBI Taxonomy.",
+    "taxonomy_release": "Pinned taxonomy release or access date.",
+    "source_name_original": "Original source label retained without normalisation.",
+    "authority_taxon_id": "Authority-specific identifier when NCBI taxon ID is unavailable.",
+    "role": "input for sampled species; expected for reviewed taxa lacking input data.",
+}
 _SAFE_TAXONOMY_TEXT = re.compile(r"^[^\x00-\x1f\x7f]{1,2048}$")
 
 
@@ -229,6 +256,80 @@ def read_taxonomy_mapping(*, path: Path, expected_species: tuple[str, ...]) -> T
     _LOGGER.info(
         "Validated taxonomy mapping: path=%s, reviewed=%s, unresolved=%s",
         source,
+        len(authority.reviewed_species),
+        len(authority.unresolved_species),
+    )
+    return authority
+
+
+def bundled_taxonomy_path() -> Path:
+    """Return the installed Results_Feb26 reviewed taxonomy mapping.
+
+    Returns:
+        Path to the packaged, versioned mapping TSV.
+
+    Raises:
+        InputValidationError: If the package data are unavailable.
+    """
+
+    candidate = files("orthofinder_interrogation_app").joinpath(
+        "data", DEFAULT_TAXONOMY_FILENAME
+    )
+    path = Path(str(candidate)).resolve()
+    if not path.is_file():
+        raise InputValidationError(
+            f"Bundled Results_Feb26 taxonomy mapping is unavailable: {path}"
+        )
+    return path
+
+
+def read_matching_bundled_taxonomy(
+    *, expected_species: tuple[str, ...]
+) -> TaxonomyAuthority | None:
+    """Load the study default only when every exact resource label matches.
+
+    Args:
+        expected_species: Exact species labels exposed by the opened resource.
+
+    Returns:
+        Validated packaged authority for an exact label-set match, otherwise
+        ``None`` so another dataset must supply its own reviewed mapping.
+
+    Raises:
+        InputValidationError: If labels or packaged data are malformed.
+    """
+
+    expected = tuple(sorted(expected_species))
+    if (
+        len(expected) != len(set(expected))
+        or any(not label.strip() for label in expected)
+    ):
+        raise InputValidationError(
+            "Expected resource species labels must be unique and non-empty."
+        )
+    path = bundled_taxonomy_path()
+    try:
+        data = path.read_bytes()
+        text = data.decode("utf-8-sig")
+        reader = csv.DictReader(io.StringIO(text), delimiter="\t", strict=True)
+        labels = tuple(
+            sorted(str(row.get("workflow_species_label", "")).strip() for row in reader)
+        )
+    except (OSError, UnicodeError, csv.Error) as error:
+        raise InputValidationError(
+            f"Bundled Results_Feb26 taxonomy mapping could not be read: {path}"
+        ) from error
+    if labels != expected:
+        _LOGGER.info(
+            "Packaged Results_Feb26 taxonomy mapping not selected: "
+            "resource_labels=%s, packaged_labels=%s",
+            len(expected),
+            len(labels),
+        )
+        return None
+    authority = parse_taxonomy_mapping(data=data, expected_species=expected)
+    _LOGGER.info(
+        "Selected packaged Results_Feb26 taxonomy mapping: reviewed=%s, unresolved=%s",
         len(authority.reviewed_species),
         len(authority.unresolved_species),
     )

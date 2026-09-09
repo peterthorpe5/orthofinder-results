@@ -112,6 +112,7 @@ def calculate_alignment_distances(
     hierarchy_node: str,
     group_id: str,
     max_members: int,
+    required_member_ids: Sequence[str] = (),
     source_file: str = "",
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Calculate pairwise-deletion amino-acid p-distances for an alignment.
@@ -126,6 +127,7 @@ def calculate_alignment_distances(
         hierarchy_node: Optional HOG species-tree node.
         group_id: Run-scoped group identifier.
         max_members: Maximum members in an exact or sampled distance matrix.
+        required_member_ids: Members that must be retained in a bounded sample.
         source_file: Exact source alignment path for provenance.
 
     Returns:
@@ -150,6 +152,7 @@ def calculate_alignment_distances(
         run_id=run_id,
         group_id=group_id,
         max_members=max_members,
+        required_member_ids=required_member_ids,
     )
     rows: list[dict[str, Any]] = []
     for left_index, member_a in enumerate(selected):

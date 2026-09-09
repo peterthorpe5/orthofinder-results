@@ -253,7 +253,7 @@ def test_plain_language_application_display_helpers(
     monkeypatch.setattr(app, "st", streamlit)
     app._navigate_to(page="Find groups")
     assert streamlit.session_state["app_page"] == "Find groups"
-    streamlit.rerun.assert_called_once()
+    streamlit.rerun.assert_not_called()
     with pytest.raises(ValueError, match="Unknown application page"):
         app._navigate_to(page="Unknown")
 

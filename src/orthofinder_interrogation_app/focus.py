@@ -16,7 +16,8 @@ from orthofinder_results.errors import InputValidationError
 _LOGGER = logging.getLogger("orthofinder_interrogation_app.focus")
 MAX_FOCUS_BYTES = 32 * 1024 * 1024
 MAX_FOCUS_RECORDS = 100_000
-DEFAULT_FOCUS_FILENAME = "default_e3_focus_proteins.tsv.gz"
+MAX_FOCUS_FIELD_CHARACTERS = 8_192
+DEFAULT_FOCUS_FILENAME = "e3_seed_catalogue.tsv"
 FOCUS_TEMPLATE_COLUMNS = (
     "protein_identifier",
     "protein_name",
@@ -27,7 +28,12 @@ FOCUS_TEMPLATE_COLUMNS = (
     "enabled",
     "note",
 )
-_IDENTIFIER_ALIASES = ("protein_identifier", "accession", "protein_id", "gene_id")
+_IDENTIFIER_ALIASES = (
+    "protein_identifier",
+    "accession",
+    "protein_id",
+    "gene_id",
+)
 _NAME_ALIASES = ("protein_name", "gene_name", "name")
 _CATEGORY_ALIASES = ("category", "e3_category")
 _EVIDENCE_TYPE_ALIASES = ("evidence_type",)
@@ -48,6 +54,19 @@ class FocusProtein:
     source: str
     enabled: bool
     note: str
+    review_status: str = ""
+    ubiquitin_go_status: str = ""
+    exclusion_go_term: str = ""
+    taxon_id: str = ""
+    sequence_md5: str = ""
+    sequence_available: str = ""
+    sequence_match_count: str = ""
+    distinct_sequence_count: str = ""
+    sequence_species: str = ""
+    sequence_identifiers: str = ""
+    protein_sequence_length: str = ""
+    annotation_scope: str = ""
+    catalogue_source: str = ""
 
 
 @dataclass(frozen=True)
@@ -90,7 +109,7 @@ def bundled_focus_path() -> Path:
     """Return the installed default E3 focus authority path.
 
     Returns:
-        Path to the packaged, versioned gzip-compressed TSV.
+        Path to the packaged, versioned TSV.
 
     Raises:
         InputValidationError: If package data are unavailable.
@@ -180,47 +199,52 @@ def parse_focus_proteins(
     headings = tuple(reader.fieldnames or ())
     if not headings or len(headings) != len(set(headings)):
         raise InputValidationError("Focus protein TSV headings are empty or duplicated.")
-    identifier_column = _one_alias(
-        headings=headings,
-        aliases=_IDENTIFIER_ALIASES,
-        required=True,
-        meaning="protein identifier",
+    catalogue_schema = "seed_id" in headings
+    identifier_column = (
+        "seed_id"
+        if catalogue_schema
+        else _one_alias(
+            headings=headings,
+            aliases=_IDENTIFIER_ALIASES,
+            required=True,
+            meaning="protein identifier",
+        )
     )
-    name_column = _one_alias(
+    name_column = _optional_generic_column(
         headings=headings,
         aliases=_NAME_ALIASES,
-        required=False,
         meaning="protein name",
+        catalogue_schema=catalogue_schema,
     )
-    category_column = _one_alias(
+    category_column = _optional_generic_column(
         headings=headings,
         aliases=_CATEGORY_ALIASES,
-        required=False,
         meaning="category",
+        catalogue_schema=catalogue_schema,
     )
-    evidence_type_column = _one_alias(
+    evidence_type_column = _optional_generic_column(
         headings=headings,
         aliases=_EVIDENCE_TYPE_ALIASES,
-        required=False,
         meaning="evidence type",
+        catalogue_schema=catalogue_schema,
     )
-    organism_column = _one_alias(
+    organism_column = _optional_generic_column(
         headings=headings,
         aliases=_ORGANISM_ALIASES,
-        required=False,
         meaning="organism",
+        catalogue_schema=catalogue_schema,
     )
-    source_column = _one_alias(
+    source_column = _optional_generic_column(
         headings=headings,
         aliases=_SOURCE_ALIASES,
-        required=False,
         meaning="source",
+        catalogue_schema=catalogue_schema,
     )
-    note_column = _one_alias(
+    note_column = _optional_generic_column(
         headings=headings,
         aliases=_NOTE_ALIASES,
-        required=False,
         meaning="note",
+        catalogue_schema=catalogue_schema,
     )
     enabled_column = "enabled" if "enabled" in headings else ""
     records: list[FocusProtein] = []
@@ -232,21 +256,47 @@ def parse_focus_proteins(
                 )
             row = {key: str(value or "").strip() for key, value in raw_row.items()}
             identifier = row[identifier_column]
+            if catalogue_schema:
+                protein_name = _first_populated(
+                    row=row,
+                    columns=("seed_protein_names", "associated_seed_protein_names"),
+                )
+                category = _first_populated(
+                    row=row,
+                    columns=("seed_category", "associated_seed_categories"),
+                )
+                evidence_type = row.get("seed_evidence_type", "")
+                organism = _first_populated(
+                    row=row,
+                    columns=("seed_organism", "associated_seed_organisms"),
+                )
+                source = _first_populated(
+                    row=row,
+                    columns=("seed_source", "catalogue_source"),
+                )
+                note = row.get("source_value", "")
+            else:
+                protein_name = row.get(name_column, "")
+                category = row.get(category_column, "")
+                evidence_type = row.get(evidence_type_column, "")
+                organism = row.get(organism_column, "")
+                source = row.get(source_column, "")
+                note = row.get(note_column, "")
             values = (
                 identifier,
-                row.get(name_column, ""),
-                row.get(category_column, ""),
-                row.get(evidence_type_column, ""),
-                row.get(organism_column, ""),
-                row.get(source_column, ""),
-                row.get(note_column, ""),
+                protein_name,
+                category,
+                evidence_type,
+                organism,
+                source,
+                note,
             )
             if not identifier:
                 raise InputValidationError(
                     f"Focus protein TSV line {line_number} has an empty identifier."
                 )
             if any(
-                len(value) > 2_048
+                len(value) > MAX_FOCUS_FIELD_CHARACTERS
                 or "\x00" in value
                 or any(ord(character) < 32 for character in value)
                 for value in values
@@ -257,16 +307,41 @@ def parse_focus_proteins(
             records.append(
                 FocusProtein(
                     identifier=identifier,
-                    protein_name=row.get(name_column, ""),
-                    category=row.get(category_column, ""),
-                    evidence_type=row.get(evidence_type_column, ""),
-                    organism=row.get(organism_column, ""),
-                    source=row.get(source_column, ""),
+                    protein_name=protein_name,
+                    category=category,
+                    evidence_type=evidence_type,
+                    organism=organism,
+                    source=source,
                     enabled=_parse_enabled(
                         value=row.get(enabled_column, "true"),
                         line_number=line_number,
                     ),
-                    note=row.get(note_column, ""),
+                    note=note,
+                    review_status=_first_populated(
+                        row=row,
+                        columns=(
+                            "seed_review_status",
+                            "associated_seed_review_statuses",
+                        ),
+                    ),
+                    ubiquitin_go_status=_first_populated(
+                        row=row,
+                        columns=(
+                            "seed_ubiquitin_go_status",
+                            "associated_seed_ubiquitin_go_statuses",
+                        ),
+                    ),
+                    exclusion_go_term=row.get("seed_exclusion_go_term", ""),
+                    taxon_id=row.get("seed_taxon_id", ""),
+                    sequence_md5=row.get("seed_sequence_md5", ""),
+                    sequence_available=row.get("sequence_available", ""),
+                    sequence_match_count=row.get("sequence_match_count", ""),
+                    distinct_sequence_count=row.get("distinct_sequence_count", ""),
+                    sequence_species=row.get("sequence_species", ""),
+                    sequence_identifiers=row.get("sequence_identifiers", ""),
+                    protein_sequence_length=row.get("protein_sequence_length", ""),
+                    annotation_scope=row.get("annotation_scope", ""),
+                    catalogue_source=row.get("catalogue_source", ""),
                 )
             )
     except csv.Error as error:
@@ -355,6 +430,49 @@ def _one_alias(
             f"Focus protein TSV requires one {meaning} heading: " + "; ".join(aliases)
         )
     return present[0] if present else ""
+
+
+def _optional_generic_column(
+    *,
+    headings: tuple[str, ...],
+    aliases: tuple[str, ...],
+    meaning: str,
+    catalogue_schema: bool,
+) -> str:
+    """Resolve an optional generic field outside the rich catalogue schema.
+
+    Args:
+        headings: Exact input headings.
+        aliases: Accepted alternatives for one semantic field.
+        meaning: Human-readable field meaning for errors.
+        catalogue_schema: Whether the explicit E3 seed schema was detected.
+
+    Returns:
+        Selected generic heading or an empty string.
+    """
+
+    if catalogue_schema:
+        return ""
+    return _one_alias(
+        headings=headings,
+        aliases=aliases,
+        required=False,
+        meaning=meaning,
+    )
+
+
+def _first_populated(*, row: dict[str, str], columns: tuple[str, ...]) -> str:
+    """Return the first non-empty value from explicitly ordered columns.
+
+    Args:
+        row: Normalised TSV row.
+        columns: Ordered primary then fallback headings.
+
+    Returns:
+        First populated value or an empty string.
+    """
+
+    return next((row.get(column, "") for column in columns if row.get(column, "")), "")
 
 
 def _parse_enabled(*, value: str, line_number: int) -> bool:

@@ -15,3 +15,4 @@ bash -n run_orthofinder_results.sh
 bash -n submit_orthofinder_results_slurm.sh
 bash -n slurm/orthofinder_results.sbatch
 bash -n slurm/selection_coverage_tree.sbatch
+bash -n slurm/e3_precursor.sbatch

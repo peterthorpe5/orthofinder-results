@@ -47,6 +47,12 @@ def test_overview_group_search_and_help_routes(
     assert any(metric.label == "Group records" and metric.value == "4" for metric in test.metric)
     assert any(header.value == "Dataset summary" for header in test.header)
     assert any("Which groups contain my species?" in item.value for item in test.markdown)
+    next(
+        button for button in test.button if button.label == "Find E3 focus clusters"
+    ).click()
+    test.run()
+    assert not test.exception
+    assert any(header.value == "Focus protein clusters" for header in test.header)
     test.sidebar.radio[0].set_value("Find groups")
     test.run()
     assert not test.exception
@@ -222,7 +228,17 @@ def test_focus_and_coverage_pages_explain_empty_or_invalid_authorities(
     test.sidebar.radio[0].set_value("Selection coverage tree")
     test.run()
     assert not test.exception
-    assert any("Load a reviewed taxonomy mapping" in item.value for item in test.warning)
+    assert any(
+        "species-to-taxonomy review template" in item.value
+        for item in test.warning
+    )
+    assert any(
+        "not an E3 protein list" in item.value for item in test.markdown
+    )
+    assert any(
+        button.label == "Download this dataset's taxonomy review template"
+        for button in test.get("download_button")
+    )
 
     monkeypatch.setenv(TAXONOMY_ENVIRONMENT_VARIABLE, str(taxonomy_mapping_file))
     monkeypatch.setenv(

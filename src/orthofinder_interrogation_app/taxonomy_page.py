@@ -20,8 +20,10 @@ from .models import GroupKey, TaxonomySearchFilters
 from .queries import OrthoFinderQueryService
 from .taxonomy import (
     TAXONOMY_COLUMNS,
+    TAXONOMY_TEMPLATE_HELP,
     TaxonomyAuthority,
     parse_taxonomy_mapping,
+    read_matching_bundled_taxonomy,
     read_taxonomy_mapping,
     taxonomy_audit_rows,
     taxonomy_template_rows,
@@ -64,24 +66,6 @@ _SPECIES_RESULT_HELP = {
     "Proteins from species": "Number of group proteins contributed by this species.",
     "Share of group": "Fraction of the group's proteins contributed by this species.",
 }
-_TAXONOMY_TEMPLATE_HELP = {
-    "workflow_species_label": "Exact species label used by this OrthoFinder resource.",
-    "source_species_name": "Species text inferred only for manual review, not accepted taxonomy.",
-    "accepted_species_name": "Human-reviewed accepted scientific name.",
-    "ncbi_taxon_id": "Human-reviewed positive NCBI taxonomy identifier for the species.",
-    "parent_taxon_id": "NCBI taxonomy identifier of the accepted immediate parent.",
-    "parent_taxon_name": "Accepted name of the immediate parent taxon.",
-    "lineage_taxon_ids": "Semicolon-separated ordered lineage of NCBI taxonomy identifiers.",
-    "lineage_names": "Semicolon-separated lineage names in the same order as lineage IDs.",
-    "mapping_status": "REVIEWED, PENDING_REVIEW, UNMAPPED or AMBIGUOUS.",
-    "mapping_method": "Method used to propose or confirm this mapping.",
-    "mapping_source": "Authoritative taxonomy source or database.",
-    "source_date": "Date on which the mapping source was accessed.",
-    "source_version": "Version or release identifier of the taxonomy source.",
-    "reviewed_by": "Person who accepted the mapping.",
-    "reviewed_at_utc": "UTC date and time at which the mapping was accepted.",
-    "review_note": "Free-text rationale, ambiguity or review action.",
-}
 
 
 def render_taxonomy_search(*, service: OrthoFinderQueryService, taxonomy_path_text: str) -> None:
@@ -115,7 +99,7 @@ def render_taxonomy_search(*, service: OrthoFinderQueryService, taxonomy_path_te
         key="taxonomy_template_download",
         tsv_label="Download taxonomy review template as TSV",
         excel_label="Download taxonomy review template as formatted Excel",
-        column_definitions=_TAXONOMY_TEMPLATE_HELP,
+        column_definitions=TAXONOMY_TEMPLATE_HELP,
         workbook_title=f"Taxonomy review template: {service.resource.run_id}",
     )
     st.caption(
@@ -145,6 +129,12 @@ def render_taxonomy_search(*, service: OrthoFinderQueryService, taxonomy_path_te
             "they remain PENDING_REVIEW until a person approves them."
         )
         return
+    if uploaded is None and not taxonomy_path_text.strip():
+        st.success(
+            "Using the packaged Results_Feb26 mapping because all 60 exact species labels "
+            "match this resource. It contains 59 REVIEWED mappings; `Leismania_major` "
+            "remains visibly UNMAPPED pending confirmation of the apparent spelling error."
+        )
     _render_mapping_audit(authority=authority)
     options = authority.taxon_options()
     if not options:
@@ -313,10 +303,12 @@ def render_taxonomy_search(*, service: OrthoFinderQueryService, taxonomy_path_te
     selected_label = st.selectbox("Inspect one taxonomic match", tuple(labels_to_keys))
     key = labels_to_keys[selected_label]
     actions = st.columns(2)
-    if actions[0].button("Explore selected taxonomic match", type="primary"):
-        _store_active_group(key=key)
-        st.session_state["app_page"] = "Cluster explorer"
-        st.rerun()
+    actions[0].button(
+        "Explore selected taxonomic match",
+        type="primary",
+        on_click=_open_taxonomic_match,
+        kwargs={"key": key},
+    )
     basket = _comparison_keys()
     if actions[1].button(
         "Add taxonomic match to comparison",
@@ -351,7 +343,7 @@ def _mapping_authority(
     taxonomy_path_text: str,
     uploaded_data: bytes | None,
 ) -> TaxonomyAuthority | None:
-    """Load an uploaded mapping or optional launcher path with clear precedence."""
+    """Load an upload, launcher path or exact-label packaged study default."""
 
     if uploaded_data is not None:
         return parse_taxonomy_mapping(data=uploaded_data, expected_species=expected_species)
@@ -359,7 +351,7 @@ def _mapping_authority(
         return read_taxonomy_mapping(
             path=Path(taxonomy_path_text), expected_species=expected_species
         )
-    return None
+    return read_matching_bundled_taxonomy(expected_species=expected_species)
 
 
 def _render_mapping_audit(*, authority: TaxonomyAuthority) -> None:
@@ -398,7 +390,7 @@ def _render_mapping_audit(*, authority: TaxonomyAuthority) -> None:
             key="taxonomy_mapping_audit",
             tsv_label="Download mapping audit as TSV",
             excel_label="Download mapping audit as formatted Excel",
-            column_definitions=_TAXONOMY_TEMPLATE_HELP,
+            column_definitions=TAXONOMY_TEMPLATE_HELP,
             workbook_title="OrthoFinder taxonomy mapping audit",
         )
 
@@ -489,6 +481,17 @@ def _distance_status_label(*, value: object) -> str:
     }
     code = str(value)
     return labels.get(code, code.replace("_", " ").title())
+
+
+def _open_taxonomic_match(*, key: GroupKey) -> None:
+    """Store a selected taxonomy result and navigate from a widget callback.
+
+    Args:
+        key: Collision-safe selected group key.
+    """
+
+    _store_active_group(key=key)
+    st.session_state["app_page"] = "Cluster explorer"
 
 
 def _mapping_status_help(*, status: str) -> str:

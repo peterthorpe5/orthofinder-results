@@ -24,7 +24,16 @@ from .focus import FocusProteinAuthority
 from .focus_page import load_focus_authority
 from .models import FocusClusterFilters, GroupKey
 from .queries import OrthoFinderQueryService
-from .taxonomy import TaxonomyAuthority, parse_taxonomy_mapping, read_taxonomy_mapping
+from .taxonomy import (
+    DEFAULT_TAXONOMY_FILENAME,
+    TAXONOMY_COLUMNS,
+    TAXONOMY_TEMPLATE_HELP,
+    TaxonomyAuthority,
+    parse_taxonomy_mapping,
+    read_matching_bundled_taxonomy,
+    read_taxonomy_mapping,
+    taxonomy_template_rows,
+)
 from .taxonomy_selection import (
     ExpectedTaxaAuthority,
     SelectionSpec,
@@ -106,12 +115,44 @@ def render_selection_coverage_tree(
         "claim that a gene, HOG or biological function is absent from that organism."
     )
     species = service.list_species()
+    st.subheader("Prepare the species-to-taxonomy mapping")
+    st.write(
+        "This upload is a completed **taxonomy review table with one row per exact "
+        "OrthoFinder species label**. It is not an E3 protein list, a gene table, a species "
+        "tree or an NCBI taxdump. Download the dataset-specific template below, populate "
+        "reviewed names, taxon IDs and lineages, then upload the completed UTF-8 TSV."
+    )
+    with st.expander("What must this file contain?", expanded=True):
+        st.markdown(
+            """
+            - Keep every `workflow_species_label` exactly as supplied; it links the mapping to
+              this resource.
+            - A usable row has `mapping_status=REVIEWED`, an accepted species name, a stable
+              terminal taxon ID, and ordered lineage IDs/names. Pending, ambiguous and
+              unmapped rows remain visible but cannot support clade predicates.
+            - Record the mapping source/version and reviewer fields so the decision is
+              auditable. Candidate mappings produced by `orthofinder-taxonomy-map` still need
+              human approval before their status becomes `REVIEWED`.
+            """
+        )
+        template_rows = taxonomy_template_rows(species=species)
+        render_table_downloads(
+            records=template_rows,
+            fieldnames=TAXONOMY_COLUMNS,
+            file_stem=f"{service.resource.run_id}_taxonomy_mapping_template",
+            key="coverage_taxonomy_template_download",
+            tsv_label="Download this dataset's taxonomy review template",
+            excel_label="Download the formatted review workbook",
+            column_definitions=TAXONOMY_TEMPLATE_HELP,
+            workbook_title=f"Taxonomy review template: {service.resource.run_id}",
+        )
     taxonomy_upload = st.file_uploader(
-        "Reviewed taxonomy mapping TSV",
+        "Upload the completed reviewed taxonomy mapping TSV",
         type=("tsv", "txt"),
         help=(
-            "Upload takes precedence over --taxonomy-map. Only REVIEWED rows enter the tree; "
-            "pending, ambiguous and unmapped labels remain in a separate inventory."
+            "Use the dataset-specific template provided immediately above. Upload takes "
+            "precedence over --taxonomy-map. Only REVIEWED rows enter the tree; pending, "
+            "ambiguous and unmapped labels remain in a separate inventory."
         ),
         key="coverage_taxonomy_upload",
     )
@@ -125,10 +166,19 @@ def render_selection_coverage_tree(
         )
         if authority is None:
             st.warning(
-                "Load a reviewed taxonomy mapping to enable the selection coverage tree. "
-                "The Taxonomic search page provides a dataset-specific review template."
+                "Complete and upload the species-to-taxonomy review template above to enable "
+                "the selection coverage tree. Rows still marked UNMAPPED or PENDING_REVIEW "
+                "cannot be used for clade selection."
             )
             return
+        if taxonomy_upload is None and not taxonomy_path_text.strip():
+            st.success(
+                "Using the packaged Results_Feb26 mapping because all 60 exact species "
+                "labels match this resource. The file is "
+                f"`data/{DEFAULT_TAXONOMY_FILENAME}`: 59 mappings are REVIEWED and "
+                "`Leismania_major` remains visibly UNMAPPED pending confirmation of the "
+                "apparent spelling error."
+            )
         graph = build_taxonomy_graph(authority=authority)
     except InputValidationError as error:
         _LOGGER.exception("Coverage taxonomy authority failed validation")
@@ -655,7 +705,7 @@ def _load_taxonomy_authority(
     taxonomy_path_text: str,
     uploaded_data: bytes | None,
 ) -> TaxonomyAuthority | None:
-    """Load upload or launcher taxonomy mapping with explicit precedence."""
+    """Load upload, launcher path or exact-label packaged study default."""
 
     if uploaded_data is not None:
         return parse_taxonomy_mapping(data=uploaded_data, expected_species=expected_species)
@@ -664,7 +714,7 @@ def _load_taxonomy_authority(
             path=Path(taxonomy_path_text),
             expected_species=expected_species,
         )
-    return None
+    return read_matching_bundled_taxonomy(expected_species=expected_species)
 
 
 def _load_expected_authority(

@@ -21,15 +21,19 @@ from orthofinder_results.errors import InputValidationError
 
 
 def test_bundled_e3_focus_authority_is_versioned_and_complete() -> None:
-    """The real inherited E3 authority is packaged and deterministically loaded."""
+    """The reviewed 1,000-seed E3 catalogue is the exact packaged default."""
 
     authority = read_focus_proteins(path=bundled_focus_path())
-    assert len(authority.records) == 43_066
-    assert len(authority.identifiers) == 43_066
+    assert len(authority.records) == 1_000
+    assert len(authority.identifiers) == 1_000
     assert authority.sha256 == (
-        "9e5ba99e751651be37e9abbaee445ef931e414c0c0ea3f70d7553eeecebcf8f7"
+        "10945b7cae2212f3bc425bd80a37481c96f3194742724bdabe41c0148e73db52"
     )
-    assert "Q9SA03" in authority.identifiers
+    assert "A0A060D0U3" in authority.identifiers
+    first = next(row for row in authority.records if row.identifier == "A0A060D0U3")
+    assert first.sequence_identifiers == "tr|A0A060D0U3|A0A060D0U3_MAIZE"
+    assert first.review_status == "unreviewed"
+    assert first.category == "Ring finger"
     assert authority.summary()["organisms"] > 1
 
 
@@ -311,7 +315,11 @@ def test_focus_parser_bounds_text_rows_and_boolean_aliases(
         )
     with pytest.raises(InputValidationError, match="unsafe text"):
         parse_focus_proteins(
-            data=("protein_identifier\tprotein_name\nA1\t" + "x" * 2_049 + "\n").encode(),
+            data=(
+                "protein_identifier\tprotein_name\nA1\t"
+                + "x" * (focus.MAX_FOCUS_FIELD_CHARACTERS + 1)
+                + "\n"
+            ).encode(),
             source_name="bad.tsv",
         )
     monkeypatch.setattr(focus, "MAX_FOCUS_RECORDS", 1)

@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+## 0.8.0 - 2026-09-09
+
+- Replace the implicit default with the exact supplied 1,000-record
+  `e3_seed_catalogue.tsv`, retain the previous broad authority only for
+  reproducibility, and accept the rich seed catalogue through explicit
+  primary-to-associated metadata fallbacks.
+- Add `orthofinder-results --action e3-precursor` for every focus-matched HOG at
+  `N0`, fixed to resolved-gene-tree patristic distances and prohibited from
+  silently applying a largest-group limit.
+- Force every matched E3 protein into a bounded deterministic member sample so
+  the primary seeds remain represented in downstream distances and graphics.
+- Publish `e3_cluster_results.tsv.gz` with one row per selected cluster,
+  complete group/copy statistics, seed provenance, min/quantile/median/mean/SD/
+  max distances, derived dispersion measures and explicit sampling coverage.
+- Publish exact seed-to-member matches, a complete matched/unmatched seed audit,
+  selected-cluster pairwise distances, matching typed Parquet relations and
+  DuckDB tables; unavailable distances retain blank measures and a reason.
+- Restrict portable and normalised gene-tree expansion to the focus-related
+  tree identifiers for precursor runs while retaining a checksum inventory of
+  every discovered tree.
+- Add a scheduler wrapper that requires cluster `TMPDIR`, stages heavy inputs
+  and first output on node-local storage, validates gzip outputs, checksum-
+  compares the persistent copy and uses a guarded atomic publication rename.
+- Fix Summary and result-table navigation with Streamlit callbacks so clicking
+  **Find E3 focus clusters** no longer mutates an already-instantiated page
+  widget; cover the real button click in a headless end-to-end test.
+- Package the audited 60-label `Results_Feb26` taxonomy mapping as a conditional
+  application default, selecting it only for an exact resource label-set match;
+  retain 59 reviewed mappings and keep the apparent `Leismania_major` spelling
+  error explicitly unmapped pending source confirmation.
+- Explain directly beside the selection-tree uploader that it expects a
+  species-to-taxonomy review table, not a protein list, tree or taxdump, and
+  provide the current dataset's editable TSV and formatted workbook there.
+- Extend unit, CLI, pipeline, Slurm and Streamlit end-to-end coverage to 421
+  passing tests while retaining the enforced 95% branch-coverage quality gate.
+
 ## 0.7.0 - 2026-09-09
 
 - Add a generic **Selection coverage tree** page and command-line action with
