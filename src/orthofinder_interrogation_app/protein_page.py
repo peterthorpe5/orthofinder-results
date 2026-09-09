@@ -25,6 +25,8 @@ _MATCH_SOURCE_LABELS = {
     "PROTEIN_ID": "Protein ID",
     "ORTHOFINDER_INTERNAL_ID": "OrthoFinder internal ID",
     "PROTEIN_AND_INTERNAL_ID": "Protein and internal ID",
+    "UNIPROT_ACCESSION": "UniProt accession",
+    "UNIPROT_ENTRY": "UniProt entry name",
 }
 _RESULT_COLUMN_HELP = {
     "Protein ID": "Canonical protein identifier stored in the group membership.",
@@ -91,6 +93,8 @@ def render_protein_search(
               header.
             - **OrthoFinder internal ID** searches values such as `0_123` from
               `SequenceIDs.txt`, where that authority is available.
+            - A controlled `sp|ACCESSION|ENTRY` or `tr|ACCESSION|ENTRY` protein ID can
+              also be found by its exact UniProt accession or entry name.
             - Descriptive gene names, symbols and functional annotations can only be found if
               they are part of the stored protein identifier; this resource does not guess
               aliases from external databases.

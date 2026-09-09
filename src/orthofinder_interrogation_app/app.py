@@ -11,6 +11,7 @@ import streamlit as st
 
 from orthofinder_interrogation_app.all_results_page import render_all_distance_results
 from orthofinder_interrogation_app.comparison_page import render_cluster_comparison
+from orthofinder_interrogation_app.coverage_page import render_selection_coverage_tree
 from orthofinder_interrogation_app.distance_data import default_cache_directory
 from orthofinder_interrogation_app.evolutionary_page import (
     _comparison_keys,
@@ -19,8 +20,11 @@ from orthofinder_interrogation_app.evolutionary_page import (
     render_evolutionary_views,
 )
 from orthofinder_interrogation_app.exports import render_table_downloads
+from orthofinder_interrogation_app.focus_page import render_focus_clusters
 from orthofinder_interrogation_app.launcher import (
     CACHE_ENVIRONMENT_VARIABLE,
+    EXPECTED_TAXA_ENVIRONMENT_VARIABLE,
+    FOCUS_ENVIRONMENT_VARIABLE,
     LOG_ENVIRONMENT_VARIABLE,
     RESOURCE_ENVIRONMENT_VARIABLE,
     TAXONOMY_ENVIRONMENT_VARIABLE,
@@ -40,23 +44,27 @@ from orthofinder_results.io_utils import configure_logging
 _LOGGER = logging.getLogger("orthofinder_interrogation_app.app")
 _PAGES = (
     "Overview",
+    "Focus protein clusters",
     "Find a protein",
     "Find groups",
     "Cluster explorer",
     "Compare clusters",
     "All distance results",
     "Taxonomic search",
+    "Selection coverage tree",
     "Offline report",
     "Help",
 )
 _PAGE_LABELS = {
     "Overview": "Summary",
+    "Focus protein clusters": "Focus protein clusters",
     "Find a protein": "Find a gene / protein",
     "Find groups": "Find groups",
     "Cluster explorer": "Explore one cluster",
     "Compare clusters": "Compare clusters",
     "All distance results": "All distance results",
     "Taxonomic search": "Taxonomic search",
+    "Selection coverage tree": "Selection coverage tree",
     "Offline report": "Download report",
     "Help": "Help & glossary",
 }
@@ -181,6 +189,19 @@ def main() -> None:
             value=os.environ.get(TAXONOMY_ENVIRONMENT_VARIABLE, ""),
             help="Optional versioned sidecar; mappings are never guessed.",
         )
+        expected_path_text = st.text_input(
+            "Expected-taxon TSV",
+            value=os.environ.get(EXPECTED_TAXA_ENVIRONMENT_VARIABLE, ""),
+            help="Optional reviewed expected universe for Selection coverage tree.",
+        )
+        focus_path_text = st.text_input(
+            "Focus-protein TSV",
+            value=os.environ.get(FOCUS_ENVIRONMENT_VARIABLE, ""),
+            help=(
+                "Optional replacement for the packaged E3 seed authority. Plain and "
+                "gzip-compressed TSV are accepted by the launcher."
+            ),
+        )
     st.sidebar.caption(f"Viewer version {__version__}")
     if not resource_text.strip():
         st.info("Provide a completed resource path in the sidebar to begin.")
@@ -192,6 +213,13 @@ def main() -> None:
         _render_resource_identity(resource=resource)
         if page_name == "Overview":
             _render_overview(service=service)
+        elif page_name == "Focus protein clusters":
+            render_focus_clusters(
+                resource=resource,
+                service=service,
+                cache_dir=cache_dir,
+                focus_path_text=focus_path_text,
+            )
         elif page_name == "Find a protein":
             render_protein_search(
                 resource=resource,
@@ -218,6 +246,13 @@ def main() -> None:
             render_taxonomy_search(
                 service=service,
                 taxonomy_path_text=taxonomy_path_text,
+            )
+        elif page_name == "Selection coverage tree":
+            render_selection_coverage_tree(
+                service=service,
+                taxonomy_path_text=taxonomy_path_text,
+                expected_path_text=expected_path_text,
+                focus_path_text=focus_path_text,
             )
         elif page_name == "Offline report":
             _render_offline_report(resource=resource)
@@ -359,6 +394,13 @@ def _render_overview(*, service: OrthoFinderQueryService) -> None:
             "need a schema-3 rebuild before the app can calculate distances on demand."
         )
     st.subheader("Choose your question")
+    st.markdown("#### Which clusters contain our E3 proteins of interest?")
+    st.write(
+        "Use the packaged, versioned E3 seed authority by default, or substitute a reviewed "
+        "custom protein list. Matching clusters retain the full distance and visual suite."
+    )
+    if st.button("Find E3 focus clusters", key="summary_focus_clusters", type="primary"):
+        _navigate_to(page="Focus protein clusters")
     actions = st.columns(3)
     actions[0].markdown("#### Which cluster contains my protein?")
     actions[0].write(
@@ -397,6 +439,17 @@ def _render_overview(*, service: OrthoFinderQueryService) -> None:
     )
     if more_actions[2].button("All distance results", key="summary_all_results"):
         _navigate_to(page="All distance results")
+    coverage_action = st.columns(3)
+    coverage_action[0].markdown("#### How does a combined taxonomy selection behave?")
+    coverage_action[0].write(
+        "Build a reviewed selection/coverage tree and audit exact, include, only and "
+        "exclusion predicates across E3-focus clusters by default."
+    )
+    if coverage_action[0].button(
+        "Build selection coverage tree",
+        key="summary_coverage_tree",
+    ):
+        _navigate_to(page="Selection coverage tree")
 
     with st.expander("Detailed group collections and hierarchy levels", expanded=False):
         st.write(
@@ -418,16 +471,18 @@ def _render_overview(*, service: OrthoFinderQueryService) -> None:
     with st.expander("Scope of this standalone app and the wider E3 workflow"):
         st.markdown(
             """
-            **Available here:** generic OrthoFinder group discovery, species and copy-number
-            profiles, reviewed taxonomic searches, bounded tree distances, compactness and
-            dispersion views, gene-tree inspection, and comparison within one run.
+            **Available here:** generic OrthoFinder group discovery, a replaceable protein-focus
+            authority (the packaged E3 seed list is the default), species and copy-number
+            profiles, reviewed taxonomy selection/coverage trees, bounded tree distances,
+            compactness and dispersion views, gene-tree inspection, and comparison within one run.
 
             **Planned generic extensions:** explicit nested-HOG and split/merge interrogation,
             followed by comparisons between independently versioned OrthoFinder runs.
 
-            **Kept in the separate E3 application:** E3-ligase prioritisation, expression,
-            experimental evidence, structures, ligandable-pocket conservation and chemistry
-            starting points. The two applications can later exchange versioned group links
+            **Kept in the separate E3 application:** downstream E3-ligase prioritisation,
+            expression, experimental evidence, structures, ligandable-pocket conservation
+            and chemistry starting points. The two applications can later exchange versioned
+            group links
             without putting E3-specific assumptions into this reusable backend.
             """
         )
@@ -823,6 +878,19 @@ def _render_help() -> None:
             the protein was not included in its original persisted sample.
             """
         )
+    with st.expander("Focus proteins and the packaged E3 authority"):
+        st.markdown(
+            """
+            **Focus protein clusters** matches a versioned protein list to canonical IDs,
+            OrthoFinder internal IDs and controlled UniProt accession/entry aliases. The packaged
+            E3 seed-evidence table is selected by default for this project, but `--focus-proteins`
+            or the page upload accepts a replacement authority without code changes.
+
+            A match means that a cluster contains at least one configured focus protein. It does
+            not automatically assign E3 function to every other cluster member. Open a match to
+            inspect its exact distances, dispersion plots, PCoA, gene-tree phylogram and networks.
+            """
+        )
     with st.expander("Required species, exact sets and rejected species"):
         st.markdown(
             """
@@ -878,6 +946,21 @@ def _render_help() -> None:
             means exclusive only among species included in this OrthoFinder run—not universal
             biological absence. **Near-exclusive** permits only the configured sampled outsiders
             and unresolved labels, all of which remain listed.
+            """
+        )
+    with st.expander("Selection coverage tree"):
+        st.markdown(
+            """
+            This page draws a **reviewed taxonomy coverage tree**, not the OrthoFinder species
+            tree or a HOG gene tree. Required exact, include-clade, only-in-clade, exact-exclude
+            and clade-exclude selectors all compose with AND. Several only-in clades use their
+            terminal intersection, and any unmapped group member makes that restriction fail
+            closed.
+
+            Selection state and dataset coverage are deliberately separate. **Expected no data**
+            means a reviewed expected taxon is not represented in this imported dataset; it is
+            never a biological absence claim. The complete download pairs Newick with a style
+            table and includes TSV audits, SVG, PDF, JSON provenance and SHA-256 checksums.
             """
         )
     with st.expander("Resource schemas, caches and provenance"):

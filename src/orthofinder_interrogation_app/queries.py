@@ -14,6 +14,8 @@ from orthofinder_results.errors import InputValidationError
 from .models import (
     DistanceResultFilters,
     DistanceResultSet,
+    FocusClusterFilters,
+    FocusClusterPage,
     GroupKey,
     GroupSearchFilters,
     ProteinSearchFilters,
@@ -32,6 +34,8 @@ MAX_GROUP_DISTANCE_ROWS = 124_750
 MAX_TAXONOMY_TEST_GROUPS = 250_000
 MAX_ALL_DISTANCE_RESULTS = 250_000
 MAX_PROTEIN_SEARCH_ROWS = 1_000
+MAX_FOCUS_CLUSTER_ROWS = 250_000
+MAX_GROUP_SPECIES_COLLECTION_ROWS = 5_000_000
 _MEMBERSHIP_RELATIONS = {
     "HOG": "hog_memberships",
     "LEGACY_ORTHOGROUP": "legacy_orthogroup_memberships",
@@ -427,6 +431,61 @@ class OrthoFinderQueryService:
             maximum_rows=filters.maximum_rows,
         )
 
+    def search_focus_clusters(self, *, filters: FocusClusterFilters) -> FocusClusterPage:
+        """Map an exact focus-protein authority to aggregated OrthoFinder groups.
+
+        Canonical membership IDs, OrthoFinder internal IDs and controlled UniProt
+        accession/entry aliases are matched exactly. The supplied focus list is never
+        interpreted as functional proof for unlisted cluster members.
+
+        Args:
+            filters: Validated focus identifiers and exact group authority.
+
+        Returns:
+            Bounded cluster summaries and complete matching counts.
+
+        Raises:
+            InputValidationError: If the group authority is unsupported.
+        """
+
+        if filters.maximum_rows > MAX_FOCUS_CLUSTER_ROWS:
+            raise InputValidationError(
+                f"Focus searches return at most {MAX_FOCUS_CLUSTER_ROWS:,} clusters."
+            )
+        sql, parameters = _focus_cluster_query(
+            run_id=self.resource.run_id,
+            filters=filters,
+            include_sequence_aliases=self.has_relation(relation="sequences"),
+        )
+        raw_rows = self._query(sql=sql, parameters=parameters)
+        total_rows = int(raw_rows[0]["_complete_cluster_count"]) if raw_rows else 0
+        matched_focus = int(raw_rows[0]["_matched_focus_total"]) if raw_rows else 0
+        rows = tuple(
+            {
+                name: value
+                for name, value in row.items()
+                if name not in {"_complete_cluster_count", "_matched_focus_total"}
+            }
+            for row in raw_rows
+        )
+        _LOGGER.info(
+            "Focus cluster search completed: run=%s, group_type=%s, node=%s, "
+            "submitted=%s, matched_focus=%s, clusters=%s, returned=%s",
+            self.resource.run_id,
+            filters.group_type,
+            filters.hierarchy_node or "ROOT",
+            len(filters.protein_identifiers),
+            matched_focus,
+            total_rows,
+            len(rows),
+        )
+        return FocusClusterPage(
+            rows=rows,
+            total_rows=total_rows,
+            matched_focus_identifiers=matched_focus,
+            submitted_focus_identifiers=len(filters.protein_identifiers),
+        )
+
     def search_groups(self, *, filters: GroupSearchFilters) -> SearchPage:
         """Return one bounded page matching exact search semantics.
 
@@ -508,6 +567,91 @@ class OrthoFinderQueryService:
                 "ORDER BY species_member_count DESC, species_label"
             ),
             parameters=_key_parameters(key=key),
+        )
+        return tuple(rows)
+
+    def get_group_species_collection(
+        self,
+        *,
+        group_type: str,
+        hierarchy_node: str,
+        group_ids: Sequence[str] = (),
+        maximum_rows: int = MAX_GROUP_SPECIES_COLLECTION_ROWS,
+    ) -> tuple[dict[str, Any], ...]:
+        """Return a bounded exact group-by-species collection for selection audits.
+
+        Args:
+            group_type: Exact HOG or legacy group authority.
+            hierarchy_node: Exact HOG level or empty legacy root.
+            group_ids: Optional exact focus-cluster identifiers.
+            maximum_rows: Maximum group/species rows materialised from DuckDB.
+
+        Returns:
+            Complete rows within the declared bound, in deterministic key order.
+
+        Raises:
+            InputValidationError: If authority, identifiers or size are unsafe.
+        """
+
+        if group_type not in _MEMBERSHIP_RELATIONS:
+            raise InputValidationError(f"Unsupported group collection type: {group_type}")
+        if group_type == "LEGACY_ORTHOGROUP" and hierarchy_node:
+            raise InputValidationError(
+                "Legacy orthogroup collections require the ROOT hierarchy."
+            )
+        if not isinstance(maximum_rows, int) or isinstance(maximum_rows, bool):
+            raise InputValidationError("maximum_rows must be an integer.")
+        if not 1 <= maximum_rows <= MAX_GROUP_SPECIES_COLLECTION_ROWS:
+            raise InputValidationError(
+                "maximum_rows must be between 1 and "
+                f"{MAX_GROUP_SPECIES_COLLECTION_ROWS:,}."
+            )
+        if isinstance(group_ids, (str, bytes)):
+            raise InputValidationError("group_ids must be a sequence of exact identifiers.")
+        identifiers = tuple(value.strip() for value in group_ids)
+        if any(not value or len(value) > 512 or "\x00" in value for value in identifiers):
+            raise InputValidationError("A group collection identifier is empty or unsafe.")
+        if len(identifiers) != len(set(identifiers)):
+            raise InputValidationError("Group collection identifiers must be unique.")
+        if len(identifiers) > 100_000:
+            raise InputValidationError("A group collection accepts at most 100,000 IDs.")
+        conditions = ["run_id = ?", "group_type = ?", "hierarchy_node = ?"]
+        parameters: list[object] = [self.resource.run_id, group_type, hierarchy_node]
+        if identifiers:
+            conditions.append("group_id IN (SELECT unnest(?::VARCHAR[]))")
+            parameters.append(list(identifiers))
+        where_sql = " AND ".join(conditions)
+        count = int(
+            self._query(
+                sql=(
+                    "SELECT count(*) AS row_count FROM group_species_statistics WHERE "
+                    + where_sql
+                ),
+                parameters=parameters,
+            )[0]["row_count"]
+        )
+        if count > maximum_rows:
+            raise InputValidationError(
+                f"Selected group collection contains {count:,} group/species rows; "
+                f"limit is {maximum_rows:,}. Restrict the hierarchy or focus clusters."
+            )
+        rows = self._query(
+            sql=(
+                "SELECT run_id, group_type, hierarchy_node, group_id, species_label, "
+                "species_member_count FROM group_species_statistics WHERE "
+                f"{where_sql} ORDER BY run_id, group_type, hierarchy_node, group_id, "
+                "species_label"
+            ),
+            parameters=parameters,
+        )
+        _LOGGER.info(
+            "Group/species collection loaded: run=%s, type=%s, node=%s, groups=%s, "
+            "rows=%s",
+            self.resource.run_id,
+            group_type,
+            hierarchy_node or "ROOT",
+            len(identifiers) if identifiers else "ALL",
+            len(rows),
         )
         return tuple(rows)
 
@@ -1016,14 +1160,23 @@ def _protein_search_query(
         relations = (relation,)
     else:
         relations = tuple(_MEMBERSHIP_RELATIONS.values())
-    if filters.match_mode == "EXACT":
+    exact_mode = filters.match_mode == "EXACT"
+    if exact_mode:
         search_value = filters.query
         member_match = "m.member_id = q.value"
         alias_match = "s.internal_id = q.value"
+        accession_match = "split_part(m.member_id, '|', 2) = q.value"
+        entry_match = "split_part(m.member_id, '|', 3) = q.value"
     else:
         search_value = _literal_contains(value=filters.query)
         member_match = "m.member_id ILIKE q.value ESCAPE '\\'"
         alias_match = "s.internal_id ILIKE q.value ESCAPE '\\'"
+        accession_match = "split_part(m.member_id, '|', 2) ILIKE q.value ESCAPE '\\'"
+        entry_match = "split_part(m.member_id, '|', 3) ILIKE q.value ESCAPE '\\'"
+    alias_pattern = "^(sp|tr)\\|[^|[:space:]]+\\|[^|[:space:]]+$"
+    pipe_identifier = f"regexp_full_match(m.member_id, '{alias_pattern}')"
+    accession_match = f"({pipe_identifier} AND {accession_match})"
+    entry_match = f"({pipe_identifier} AND {entry_match})"
 
     branches = []
     parameters: list[object] = [search_value]
@@ -1034,22 +1187,63 @@ def _protein_search_query(
                 "AND s.member_id = m.member_id AND s.species_label = m.species_label "
             )
             internal_identifier = "coalesce(s.internal_id, '')"
-            combined_match = f"({member_match} OR {alias_match})"
-            match_source = (
-                f"CASE WHEN {member_match} AND {alias_match} THEN "
-                "'PROTEIN_AND_INTERNAL_ID' "
-                f"WHEN {member_match} THEN 'PROTEIN_ID' "
-                "ELSE 'ORTHOFINDER_INTERNAL_ID' END"
+            combined_match = (
+                f"({member_match} OR {alias_match} OR {accession_match} OR {entry_match})"
             )
-            matched_identifier = (
-                f"CASE WHEN {member_match} THEN m.member_id ELSE s.internal_id END"
-            )
+            if exact_mode:
+                match_source = (
+                    f"CASE WHEN {member_match} AND {alias_match} THEN "
+                    "'PROTEIN_AND_INTERNAL_ID' "
+                    f"WHEN {member_match} THEN 'PROTEIN_ID' "
+                    f"WHEN {alias_match} THEN 'ORTHOFINDER_INTERNAL_ID' "
+                    f"WHEN {accession_match} THEN 'UNIPROT_ACCESSION' "
+                    "ELSE 'UNIPROT_ENTRY' END"
+                )
+                matched_identifier = (
+                    f"CASE WHEN {member_match} THEN m.member_id "
+                    f"WHEN {alias_match} THEN s.internal_id "
+                    f"WHEN {accession_match} THEN split_part(m.member_id, '|', 2) "
+                    "ELSE split_part(m.member_id, '|', 3) END"
+                )
+            else:
+                match_source = (
+                    f"CASE WHEN {alias_match} THEN 'ORTHOFINDER_INTERNAL_ID' "
+                    f"WHEN {accession_match} THEN 'UNIPROT_ACCESSION' "
+                    f"WHEN {entry_match} THEN 'UNIPROT_ENTRY' "
+                    "ELSE 'PROTEIN_ID' END"
+                )
+                matched_identifier = (
+                    f"CASE WHEN {alias_match} THEN s.internal_id "
+                    f"WHEN {accession_match} THEN split_part(m.member_id, '|', 2) "
+                    f"WHEN {entry_match} THEN split_part(m.member_id, '|', 3) "
+                    "ELSE m.member_id END"
+                )
         else:
             alias_join = ""
             internal_identifier = "''"
-            combined_match = member_match
-            match_source = "'PROTEIN_ID'"
-            matched_identifier = "m.member_id"
+            combined_match = f"({member_match} OR {accession_match} OR {entry_match})"
+            if exact_mode:
+                match_source = (
+                    f"CASE WHEN {member_match} THEN 'PROTEIN_ID' "
+                    f"WHEN {accession_match} THEN 'UNIPROT_ACCESSION' "
+                    "ELSE 'UNIPROT_ENTRY' END"
+                )
+                matched_identifier = (
+                    f"CASE WHEN {member_match} THEN m.member_id "
+                    f"WHEN {accession_match} THEN split_part(m.member_id, '|', 2) "
+                    "ELSE split_part(m.member_id, '|', 3) END"
+                )
+            else:
+                match_source = (
+                    f"CASE WHEN {accession_match} THEN 'UNIPROT_ACCESSION' "
+                    f"WHEN {entry_match} THEN 'UNIPROT_ENTRY' "
+                    "ELSE 'PROTEIN_ID' END"
+                )
+                matched_identifier = (
+                    f"CASE WHEN {accession_match} THEN split_part(m.member_id, '|', 2) "
+                    f"WHEN {entry_match} THEN split_part(m.member_id, '|', 3) "
+                    "ELSE m.member_id END"
+                )
         branches.append(
             "SELECT DISTINCT m.run_id, m.group_type, m.hierarchy_node, m.group_id, "
             "m.legacy_orthogroup_id, m.gene_tree_parent_clade, m.species_label, "
@@ -1081,9 +1275,132 @@ def _protein_search_query(
         "ON d.run_id = mm.run_id AND d.group_type = mm.group_type "
         "AND d.hierarchy_node = mm.hierarchy_node AND d.group_id = mm.group_id "
         "AND d.app_distance_rank = 1 ORDER BY CASE mm.match_source "
-        "WHEN 'PROTEIN_ID' THEN 0 WHEN 'PROTEIN_AND_INTERNAL_ID' THEN 1 ELSE 2 END, "
+        "WHEN 'PROTEIN_ID' THEN 0 WHEN 'PROTEIN_AND_INTERNAL_ID' THEN 1 "
+        "WHEN 'ORTHOFINDER_INTERNAL_ID' THEN 2 WHEN 'UNIPROT_ACCESSION' THEN 3 "
+        "ELSE 4 END, "
         "mm.group_type, mm.hierarchy_node, mm.group_id, mm.species_label, mm.member_id "
         "LIMIT ?"
+    )
+    parameters.append(filters.maximum_rows)
+    return sql, tuple(parameters)
+
+
+def _focus_cluster_query(
+    *,
+    run_id: str,
+    filters: FocusClusterFilters,
+    include_sequence_aliases: bool,
+) -> tuple[str, tuple[object, ...]]:
+    """Build a parameterised focus-authority-to-cluster aggregation query.
+
+    Args:
+        run_id: Immutable resource run identifier.
+        filters: Exact protein and group-authority controls.
+        include_sequence_aliases: Whether SequenceIDs-derived aliases are available.
+
+    Returns:
+        DuckDB SQL and ordered bound parameters.
+
+    Raises:
+        InputValidationError: If the group system is unsupported.
+    """
+
+    relation = _MEMBERSHIP_RELATIONS.get(filters.group_type)
+    if relation is None:
+        raise InputValidationError(
+            f"Unsupported focus group type: {filters.group_type}"
+        )
+    if filters.group_type == "LEGACY_ORTHOGROUP" and filters.hierarchy_node:
+        raise InputValidationError(
+            "Legacy orthogroup focus searches require the ROOT hierarchy."
+        )
+    alias_pattern = "^(sp|tr)\\|[^|[:space:]]+\\|[^|[:space:]]+$"
+    parameters: list[object] = [list(filters.protein_identifiers)]
+    if include_sequence_aliases:
+        alias_sql = (
+            "identifier_aliases AS ("
+            "SELECT run_id, member_id, species_label, internal_id, member_id AS alias, "
+            "'PROTEIN_ID' AS match_authority FROM sequences WHERE run_id = ? UNION ALL "
+            "SELECT run_id, member_id, species_label, internal_id, internal_id AS alias, "
+            "'ORTHOFINDER_INTERNAL_ID' AS match_authority FROM sequences "
+            "WHERE run_id = ? AND internal_id <> '' UNION ALL "
+            "SELECT run_id, member_id, species_label, internal_id, "
+            "split_part(member_id, '|', 2) AS alias, "
+            "'UNIPROT_ACCESSION' AS match_authority FROM sequences "
+            f"WHERE run_id = ? AND regexp_full_match(member_id, '{alias_pattern}') UNION ALL "
+            "SELECT run_id, member_id, species_label, internal_id, "
+            "split_part(member_id, '|', 3) AS alias, "
+            "'UNIPROT_ENTRY' AS match_authority FROM sequences "
+            f"WHERE run_id = ? AND regexp_full_match(member_id, '{alias_pattern}')), "
+            "matched_sequences AS (SELECT DISTINCT aliases.run_id, aliases.member_id, "
+            "aliases.species_label, aliases.internal_id, focus.focus_identifier, "
+            "aliases.match_authority FROM identifier_aliases AS aliases JOIN focus_terms "
+            "AS focus ON focus.focus_identifier = aliases.alias), "
+            "matched_memberships AS (SELECT DISTINCT m.run_id, m.group_type, "
+            "m.hierarchy_node, m.group_id, m.legacy_orthogroup_id, "
+            "m.gene_tree_parent_clade, m.member_id, m.species_label, "
+            "matches.focus_identifier, matches.match_authority FROM "
+            f"{relation} AS m JOIN matched_sequences AS matches ON "
+            "matches.run_id = m.run_id AND matches.member_id = m.member_id "
+            "AND matches.species_label = m.species_label WHERE m.run_id = ? "
+            "AND m.hierarchy_node = ?), "
+        )
+        parameters.extend((run_id, run_id, run_id, run_id, run_id, filters.hierarchy_node))
+    else:
+        alias_sql = (
+            "scoped_memberships AS (SELECT * FROM "
+            f"{relation} WHERE run_id = ? AND hierarchy_node = ?), "
+            "identifier_aliases AS (SELECT *, member_id AS alias, "
+            "'PROTEIN_ID' AS match_authority FROM scoped_memberships UNION ALL "
+            "SELECT *, split_part(member_id, '|', 2) AS alias, "
+            "'UNIPROT_ACCESSION' AS match_authority FROM scoped_memberships "
+            f"WHERE regexp_full_match(member_id, '{alias_pattern}') UNION ALL "
+            "SELECT *, split_part(member_id, '|', 3) AS alias, "
+            "'UNIPROT_ENTRY' AS match_authority FROM scoped_memberships "
+            f"WHERE regexp_full_match(member_id, '{alias_pattern}')), "
+            "matched_memberships AS (SELECT DISTINCT aliases.run_id, "
+            "aliases.group_type, aliases.hierarchy_node, aliases.group_id, "
+            "aliases.legacy_orthogroup_id, aliases.gene_tree_parent_clade, "
+            "aliases.member_id, aliases.species_label, focus.focus_identifier, "
+            "aliases.match_authority FROM identifier_aliases AS aliases JOIN "
+            "focus_terms AS focus ON focus.focus_identifier = aliases.alias), "
+        )
+        parameters.extend((run_id, filters.hierarchy_node))
+    sql = (
+        "WITH focus_terms AS (SELECT DISTINCT unnest(?::VARCHAR[]) AS focus_identifier), "
+        f"{alias_sql} aggregated AS (SELECT run_id, group_type, hierarchy_node, group_id, "
+        "min(legacy_orthogroup_id) AS legacy_orthogroup_id, "
+        "min(gene_tree_parent_clade) AS gene_tree_parent_clade, "
+        "count(DISTINCT focus_identifier) AS matched_focus_count, "
+        "count(DISTINCT member_id) AS matched_protein_count, "
+        "string_agg(DISTINCT focus_identifier, ';' ORDER BY focus_identifier) "
+        "AS matched_focus_identifiers, "
+        "string_agg(DISTINCT member_id, ';' ORDER BY member_id) AS matched_member_ids, "
+        "string_agg(DISTINCT species_label, ';' ORDER BY species_label) "
+        "AS matched_species_labels, "
+        "string_agg(DISTINCT match_authority, ';' ORDER BY match_authority) "
+        "AS match_authorities FROM matched_memberships GROUP BY run_id, group_type, "
+        "hierarchy_node, group_id), preferred_distance AS (SELECT *, row_number() OVER ("
+        "PARTITION BY run_id, group_type, hierarchy_node, group_id ORDER BY "
+        "CASE WHEN sampled_member_count = total_member_count THEN 0 ELSE 1 END, "
+        "sampled_member_count DESC, distance_method, source_file) AS app_distance_rank "
+        "FROM distance_statistics), results AS (SELECT matches.*, stats.member_count, "
+        "stats.species_count, stats.max_copies_per_species, stats.mean_copies_per_species, "
+        "distance.distance_method, distance.computation_status, "
+        "distance.sampled_member_count, distance.distance_pair_count, "
+        "distance.mean_distance, distance.population_stddev_distance FROM aggregated "
+        "AS matches JOIN group_statistics AS stats ON stats.run_id = matches.run_id "
+        "AND stats.group_type = matches.group_type "
+        "AND stats.hierarchy_node = matches.hierarchy_node "
+        "AND stats.group_id = matches.group_id LEFT JOIN preferred_distance AS distance "
+        "ON distance.run_id = matches.run_id AND distance.group_type = matches.group_type "
+        "AND distance.hierarchy_node = matches.hierarchy_node "
+        "AND distance.group_id = matches.group_id AND distance.app_distance_rank = 1), "
+        "matched_total AS (SELECT count(DISTINCT focus_identifier) AS value "
+        "FROM matched_memberships) SELECT results.*, count(*) OVER () "
+        "AS _complete_cluster_count, matched_total.value AS _matched_focus_total "
+        "FROM results CROSS JOIN matched_total ORDER BY matched_focus_count DESC, "
+        "matched_protein_count DESC, member_count DESC, group_id LIMIT ?"
     )
     parameters.append(filters.maximum_rows)
     return sql, tuple(parameters)

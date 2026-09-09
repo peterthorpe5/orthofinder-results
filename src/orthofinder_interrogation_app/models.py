@@ -264,6 +264,74 @@ class ProteinSearchPage:
 
 
 @dataclass(frozen=True)
+class FocusClusterFilters:
+    """Validated controls for mapping a protein authority to clusters.
+
+    Attributes:
+        protein_identifiers: Exact canonical, internal or parsed UniProt IDs.
+        group_type: Exact group system.
+        hierarchy_node: Exact HOG level or the empty legacy root.
+        maximum_rows: Maximum aggregated cluster rows returned to the browser.
+    """
+
+    protein_identifiers: tuple[str, ...]
+    group_type: str
+    hierarchy_node: str
+    maximum_rows: int = 2_000
+
+    def __post_init__(self) -> None:
+        """Normalise the authority and reject ambiguous or excessive queries."""
+
+        if isinstance(self.protein_identifiers, (str, bytes)):
+            raise InputValidationError("Focus proteins must be supplied as a sequence.")
+        raw_identifiers = tuple(self.protein_identifiers)
+        if any(
+            not isinstance(value, str)
+            or len(value) > 512
+            or "\x00" in value
+            or any(ord(character) < 32 for character in value)
+            for value in raw_identifiers
+        ):
+            raise InputValidationError("A focus protein identifier is unsafe or overlong.")
+        identifiers = tuple(
+            value.strip() for value in raw_identifiers if isinstance(value, str)
+        )
+        if not identifiers or any(not value for value in identifiers):
+            raise InputValidationError("Focus protein identifiers must be non-empty text.")
+        if len(identifiers) > 100_000:
+            raise InputValidationError("Focus protein searches accept at most 100,000 IDs.")
+        if len(identifiers) != len(set(identifiers)):
+            raise InputValidationError("Focus protein identifiers must be unique.")
+        if not isinstance(self.group_type, str) or not self.group_type.strip():
+            raise InputValidationError("Focus group_type must be non-empty text.")
+        if not isinstance(self.hierarchy_node, str):
+            raise InputValidationError("Focus hierarchy_node must be text.")
+        if not isinstance(self.maximum_rows, int) or isinstance(self.maximum_rows, bool):
+            raise InputValidationError("Focus maximum_rows must be an integer.")
+        if not 1 <= self.maximum_rows <= 250_000:
+            raise InputValidationError("Focus maximum_rows must be between 1 and 250,000.")
+        object.__setattr__(self, "protein_identifiers", tuple(sorted(identifiers)))
+        object.__setattr__(self, "group_type", self.group_type.strip())
+        object.__setattr__(self, "hierarchy_node", self.hierarchy_node.strip())
+
+
+@dataclass(frozen=True)
+class FocusClusterPage:
+    """One bounded, aggregated protein-authority-to-cluster result."""
+
+    rows: tuple[dict[str, Any], ...]
+    total_rows: int
+    matched_focus_identifiers: int
+    submitted_focus_identifiers: int
+
+    @property
+    def truncated(self) -> bool:
+        """Return whether matching clusters exceed the browser limit."""
+
+        return self.total_rows > len(self.rows)
+
+
+@dataclass(frozen=True)
 class TaxonomySearchFilters:
     """Validated controls for one descendant-aware taxonomic search."""
 

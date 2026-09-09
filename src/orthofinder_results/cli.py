@@ -34,10 +34,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--action",
         required=True,
-        choices=("inspect", "run", "report"),
+        choices=("inspect", "run", "report", "coverage-tree"),
         help=(
-            "Read-only layout inspection, complete resource publication, or "
-            "report-only regeneration from a completed resource."
+            "Read-only inspection, complete resource publication, report-only "
+            "regeneration, or selection-coverage export from a completed resource."
         ),
     )
     parser.add_argument("--results-dir", type=Path)
@@ -51,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--resource-dir",
         type=Path,
-        help="Completed orthofinder-results resource for --action report.",
+        help="Completed resource for --action report or --action coverage-tree.",
     )
     parser.add_argument(
         "--report-output",
@@ -126,6 +126,49 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument(
+        "--taxonomy-map",
+        type=Path,
+        help="Reviewed offline taxonomy mapping for --action coverage-tree.",
+    )
+    parser.add_argument(
+        "--expected-taxa",
+        type=Path,
+        help="Optional explicit expected-taxon TSV for --action coverage-tree.",
+    )
+    parser.add_argument(
+        "--focus-proteins",
+        type=Path,
+        help="Optional protein focus TSV; packaged E3 seeds are the default.",
+    )
+    parser.add_argument("--require-exact-tax-id", action="append", default=[])
+    parser.add_argument("--include-clade-tax-id", action="append", default=[])
+    parser.add_argument("--only-in-clade-tax-id", action="append", default=[])
+    parser.add_argument("--exclude-exact-tax-id", action="append", default=[])
+    parser.add_argument("--exclude-clade-tax-id", action="append", default=[])
+    parser.add_argument(
+        "--coverage-group-type",
+        choices=("HOG", "LEGACY_ORTHOGROUP"),
+        default="HOG",
+    )
+    parser.add_argument("--coverage-hierarchy-node", default="N0")
+    parser.add_argument(
+        "--coverage-all-groups",
+        action="store_true",
+        help="Evaluate all selected-authority groups instead of E3 focus clusters.",
+    )
+    parser.add_argument("--coverage-compact", action="store_true")
+    parser.add_argument("--coverage-max-groups", type=int, default=10_000)
+    parser.add_argument("--coverage-max-nodes", type=int, default=5_000)
+    parser.add_argument(
+        "--coverage-created-at-utc",
+        default="",
+        help=(
+            "Optional fixed ISO-8601 UTC manifest timestamp for byte-reproducible exports."
+        ),
+    )
+    parser.add_argument("--validate-only", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
     return parser
 
 
@@ -174,6 +217,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"{record['size_bytes']:,}",
                 record["path"],
             )
+            return 0
+        if args.action == "coverage-tree":
+            _validate_coverage_arguments(parser=parser, args=args)
+            from orthofinder_interrogation_app.coverage_cli import (
+                run_coverage_tree_action,
+            )
+
+            manifest = run_coverage_tree_action(arguments=args)
+            print(json.dumps(manifest, indent=2, sort_keys=True))
             return 0
         _validate_run_arguments(parser=parser, args=args)
         manifest = run_pipeline(
@@ -286,4 +338,45 @@ def _validate_report_arguments(
     ):
         parser.error(
             "--report-output and --log-output must be outside the immutable --resource-dir."
+        )
+
+
+def _validate_coverage_arguments(
+    *, parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    """Validate arguments specific to selection coverage publication.
+
+    Args:
+        parser: Parser used for controlled named-option errors.
+        args: Parsed command-line arguments.
+    """
+
+    if args.resource_dir is None or args.taxonomy_map is None:
+        parser.error(
+            "--resource-dir and --taxonomy-map are required for --action coverage-tree."
+        )
+    if args.validate_only and args.dry_run:
+        parser.error("--validate-only and --dry-run are mutually exclusive.")
+    if not 1 <= args.coverage_max_groups <= 250_000:
+        parser.error("--coverage-max-groups must be between 1 and 250,000.")
+    if not 1 <= args.coverage_max_nodes <= 5_000:
+        parser.error("--coverage-max-nodes must be between 1 and 5,000.")
+    if args.coverage_group_type == "LEGACY_ORTHOGROUP":
+        if args.coverage_hierarchy_node in {"ROOT", "root"}:
+            args.coverage_hierarchy_node = ""
+        elif args.coverage_hierarchy_node:
+            parser.error(
+                "--coverage-hierarchy-node must be ROOT for LEGACY_ORTHOGROUP."
+            )
+    if any(
+        value is not None
+        for value in (
+            args.results_dir,
+            args.inspection_output,
+            args.report_output,
+            args.log_output,
+        )
+    ):
+        parser.error(
+            "Inspection, raw-run and report-only paths are not valid for coverage-tree."
         )

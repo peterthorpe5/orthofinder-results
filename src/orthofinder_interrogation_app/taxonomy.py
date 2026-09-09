@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import logging
 import math
+import re
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -21,7 +23,7 @@ MAX_TAXONOMY_BYTES = 5 * 1024 * 1024
 MAPPING_STATUSES = frozenset(
     {"REVIEWED", "PENDING_REVIEW", "UNMAPPED", "AMBIGUOUS"}
 )
-TAXONOMY_COLUMNS = (
+CORE_TAXONOMY_COLUMNS = (
     "workflow_species_label",
     "source_species_name",
     "accepted_species_name",
@@ -39,6 +41,17 @@ TAXONOMY_COLUMNS = (
     "reviewed_at_utc",
     "review_note",
 )
+EXTENDED_TAXONOMY_COLUMNS = (
+    "lineage_ranks",
+    "taxon_rank",
+    "taxonomy_authority",
+    "taxonomy_release",
+    "source_name_original",
+    "authority_taxon_id",
+    "role",
+)
+TAXONOMY_COLUMNS = (*CORE_TAXONOMY_COLUMNS, *EXTENDED_TAXONOMY_COLUMNS)
+_SAFE_TAXONOMY_TEXT = re.compile(r"^[^\x00-\x1f\x7f]{1,2048}$")
 
 
 @dataclass(frozen=True)
@@ -61,6 +74,13 @@ class TaxonomyRecord:
     reviewed_by: str
     reviewed_at_utc: str
     review_note: str
+    lineage_ranks: tuple[str, ...] = ()
+    taxon_rank: str = "unranked"
+    taxonomy_authority: str = ""
+    taxonomy_release: str = ""
+    source_name_original: str = ""
+    authority_taxon_id: str = ""
+    role: str = "input"
 
     def is_descendant_of(self, *, taxon_id: int) -> bool:
         """Return whether this reviewed record is the target or its descendant."""
@@ -68,6 +88,16 @@ class TaxonomyRecord:
         return self.mapping_status == "REVIEWED" and (
             self.ncbi_taxon_id == taxon_id or taxon_id in self.lineage_taxon_ids
         )
+
+    @property
+    def taxon_key(self) -> str:
+        """Return the stable selected-authority identifier for this terminal."""
+
+        if self.ncbi_taxon_id is not None:
+            return str(self.ncbi_taxon_id)
+        if self.authority_taxon_id:
+            return f"{self.taxonomy_authority}:{self.authority_taxon_id}"
+        return ""
 
 
 @dataclass(frozen=True)
@@ -89,12 +119,25 @@ class TaxonomyAuthority:
 
     records: tuple[TaxonomyRecord, ...]
     expected_species: tuple[str, ...]
+    mapping_sha256: str = ""
+
+    @property
+    def all_reviewed_records(self) -> tuple[TaxonomyRecord, ...]:
+        """Return every reviewed input or declared expected mapping record."""
+
+        return tuple(row for row in self.records if row.mapping_status == "REVIEWED")
 
     @property
     def reviewed_records(self) -> tuple[TaxonomyRecord, ...]:
-        """Return records explicitly marked reviewed."""
+        """Return reviewed records representing exact resource input labels."""
 
-        return tuple(row for row in self.records if row.mapping_status == "REVIEWED")
+        expected = set(self.expected_species)
+        return tuple(
+            row
+            for row in self.records
+            if row.mapping_status == "REVIEWED"
+            and row.workflow_species_label in expected
+        )
 
     @property
     def reviewed_species(self) -> tuple[str, ...]:
@@ -205,7 +248,7 @@ def parse_taxonomy_mapping(*, data: bytes, expected_species: tuple[str, ...]) ->
         raise InputValidationError("Taxonomy TSV must be valid UTF-8.") from error
     reader = csv.DictReader(io.StringIO(text), delimiter="\t", strict=True)
     headings = tuple(reader.fieldnames or ())
-    missing = [column for column in TAXONOMY_COLUMNS if column not in headings]
+    missing = [column for column in CORE_TAXONOMY_COLUMNS if column not in headings]
     if missing:
         raise InputValidationError("Taxonomy TSV lacks required columns: " + "; ".join(missing))
     if len(headings) != len(set(headings)):
@@ -227,15 +270,38 @@ def parse_taxonomy_mapping(*, data: bytes, expected_species: tuple[str, ...]) ->
         raise InputValidationError(
             "Taxonomy TSV contains duplicate workflow species labels: " + "; ".join(duplicates)
         )
+    casefold_labels: dict[str, list[str]] = {}
+    for label in labels:
+        casefold_labels.setdefault(label.casefold(), []).append(label)
+    case_collisions = tuple(
+        sorted(values)
+        for values in casefold_labels.values()
+        if len(set(values)) > 1
+    )
+    if case_collisions:
+        raise InputValidationError(
+            "Taxonomy TSV contains case-colliding workflow labels: "
+            + "; ".join(" / ".join(values) for values in case_collisions)
+        )
     expected = tuple(sorted(set(expected_species)))
     if len(expected) != len(expected_species) or any(not value.strip() for value in expected):
         raise InputValidationError("Expected resource species labels must be unique and non-empty.")
-    unexpected = sorted(set(labels).difference(expected))
-    if unexpected:
+    unexpected_input = sorted(
+        row.workflow_species_label
+        for row in records
+        if row.workflow_species_label not in expected
+        and row.role.casefold() in {"", "input", "resource_input"}
+    )
+    if unexpected_input:
         raise InputValidationError(
-            "Taxonomy TSV contains species absent from this resource: " + "; ".join(unexpected)
+            "Taxonomy TSV marks labels absent from this resource as input: "
+            + "; ".join(unexpected_input)
         )
-    return TaxonomyAuthority(records=tuple(records), expected_species=expected)
+    return TaxonomyAuthority(
+        records=tuple(records),
+        expected_species=expected,
+        mapping_sha256=hashlib.sha256(data).hexdigest(),
+    )
 
 
 def taxonomy_template(*, species: tuple[str, ...]) -> bytes:
@@ -278,7 +344,9 @@ def taxonomy_template_rows(*, species: tuple[str, ...]) -> tuple[dict[str, str],
             {
                 "workflow_species_label": label,
                 "source_species_name": label.replace("_", " "),
+                "source_name_original": label,
                 "mapping_status": "UNMAPPED",
+                "role": "input",
                 "review_note": "Review required before descendant filtering.",
             }
         )
@@ -416,6 +484,34 @@ def _parse_record(*, raw_row: dict[str | None, str | None], line_number: int) ->
         raise InputValidationError(
             f"Taxonomy TSV line {line_number} has unequal lineage ID/name counts."
         )
+    lineage_ranks = _rank_list(
+        value=row.get("lineage_ranks", ""),
+        expected_count=len(lineage_ids),
+        line_number=line_number,
+    )
+    taxon_rank = row.get("taxon_rank", "") or "unranked"
+    taxonomy_authority = row.get("taxonomy_authority", "") or row["mapping_source"]
+    taxonomy_release = row.get("taxonomy_release", "") or row["source_version"]
+    source_name_original = (
+        row.get("source_name_original", "") or row["source_species_name"] or label
+    )
+    authority_taxon_id = row.get("authority_taxon_id", "")
+    role = row.get("role", "") or "input"
+    _validate_taxonomy_texts(
+        values=(
+            label,
+            row["accepted_species_name"],
+            *lineage_names,
+            *lineage_ranks,
+            taxon_rank,
+            taxonomy_authority,
+            taxonomy_release,
+            source_name_original,
+            authority_taxon_id,
+            role,
+        ),
+        line_number=line_number,
+    )
     if status in {"REVIEWED", "PENDING_REVIEW"}:
         candidate_required = (
             "source_species_name",
@@ -426,7 +522,7 @@ def _parse_record(*, raw_row: dict[str | None, str | None], line_number: int) ->
             "source_version",
         )
         absent = [column for column in candidate_required if not row[column]]
-        if taxon_id is None:
+        if taxon_id is None and not authority_taxon_id:
             absent.append("ncbi_taxon_id")
         if absent:
             raise InputValidationError(
@@ -458,6 +554,15 @@ def _parse_record(*, raw_row: dict[str | None, str | None], line_number: int) ->
             reviewed_at_utc=row["reviewed_at_utc"],
             line_number=line_number,
         )
+        if taxon_id is None and not authority_taxon_id:
+            raise InputValidationError(
+                f"Reviewed taxonomy row {line_number} requires ncbi_taxon_id or "
+                "authority_taxon_id."
+            )
+        if not taxonomy_authority or not taxonomy_release:
+            raise InputValidationError(
+                f"Reviewed taxonomy row {line_number} lacks taxonomy authority/release."
+            )
     return TaxonomyRecord(
         workflow_species_label=label,
         source_species_name=row["source_species_name"],
@@ -475,7 +580,58 @@ def _parse_record(*, raw_row: dict[str | None, str | None], line_number: int) ->
         reviewed_by=row["reviewed_by"],
         reviewed_at_utc=row["reviewed_at_utc"],
         review_note=row["review_note"],
+        lineage_ranks=lineage_ranks,
+        taxon_rank=taxon_rank,
+        taxonomy_authority=taxonomy_authority,
+        taxonomy_release=taxonomy_release,
+        source_name_original=source_name_original,
+        authority_taxon_id=authority_taxon_id,
+        role=role,
     )
+
+
+def _rank_list(
+    *, value: str, expected_count: int, line_number: int
+) -> tuple[str, ...]:
+    """Parse optional lineage ranks while preserving vector alignment.
+
+    Args:
+        value: Semicolon-delimited rank vector.
+        expected_count: Number of lineage identifiers and names.
+        line_number: Source line used in controlled errors.
+
+    Returns:
+        Exact ranks, or explicit ``unranked`` placeholders for a legacy mapping.
+
+    Raises:
+        InputValidationError: If a supplied vector is empty or misaligned.
+    """
+
+    if not value:
+        return tuple("unranked" for _ in range(expected_count))
+    ranks = tuple(part.strip() for part in value.split(";"))
+    if len(ranks) != expected_count or any(not rank for rank in ranks):
+        raise InputValidationError(
+            f"Taxonomy TSV line {line_number} has unequal or empty lineage ranks."
+        )
+    return ranks
+
+
+def _validate_taxonomy_texts(*, values: tuple[str, ...], line_number: int) -> None:
+    """Reject control characters and unbounded labels before tree rendering.
+
+    Args:
+        values: Taxonomy and provenance values; empty optional values are allowed.
+        line_number: Source line used in controlled errors.
+
+    Raises:
+        InputValidationError: If a non-empty value is unsafe or excessively long.
+    """
+
+    if any(value and _SAFE_TAXONOMY_TEXT.fullmatch(value) is None for value in values):
+        raise InputValidationError(
+            f"Taxonomy TSV line {line_number} contains an unsafe or overlong text value."
+        )
 
 
 def _optional_taxon_id(*, value: str, line_number: int) -> int | None:

@@ -22,6 +22,8 @@ _LOGGER = logging.getLogger("orthofinder_interrogation_app.launcher")
 RESOURCE_ENVIRONMENT_VARIABLE = "ORTHOFINDER_RESULTS_RESOURCE"
 LOG_ENVIRONMENT_VARIABLE = "ORTHOFINDER_RESULTS_APP_LOG"
 TAXONOMY_ENVIRONMENT_VARIABLE = "ORTHOFINDER_RESULTS_TAXONOMY"
+EXPECTED_TAXA_ENVIRONMENT_VARIABLE = "ORTHOFINDER_RESULTS_EXPECTED_TAXA"
+FOCUS_ENVIRONMENT_VARIABLE = "ORTHOFINDER_RESULTS_FOCUS_PROTEINS"
 CACHE_ENVIRONMENT_VARIABLE = "ORTHOFINDER_RESULTS_CACHE"
 DEFAULT_PORT = 8501
 MAX_AUTOMATIC_PORT_ATTEMPTS = 100
@@ -58,6 +60,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--taxonomy-map",
         type=Path,
         help="Optional reviewed taxonomy TSV sidecar; the resource is never modified.",
+    )
+    parser.add_argument(
+        "--expected-taxa",
+        type=Path,
+        help="Optional reviewed expected-taxon TSV sidecar for coverage trees.",
+    )
+    parser.add_argument(
+        "--focus-proteins",
+        type=Path,
+        help=(
+            "Optional plain or gzip-compressed focus protein TSV. The packaged E3 "
+            "authority is used when omitted."
+        ),
     )
     parser.add_argument(
         "--cache-dir",
@@ -122,6 +137,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             _LOGGER.error("Taxonomy mapping is not a file: %s", taxonomy_path)
             return 2
         environment[TAXONOMY_ENVIRONMENT_VARIABLE] = str(taxonomy_path)
+    if arguments.expected_taxa is not None:
+        expected_path = arguments.expected_taxa.expanduser().resolve()
+        if not expected_path.is_file():
+            _LOGGER.error("Expected-taxon authority is not a file: %s", expected_path)
+            return 2
+        environment[EXPECTED_TAXA_ENVIRONMENT_VARIABLE] = str(expected_path)
+    if arguments.focus_proteins is not None:
+        focus_path = arguments.focus_proteins.expanduser().resolve()
+        if not focus_path.is_file():
+            _LOGGER.error("Focus protein authority is not a file: %s", focus_path)
+            return 2
+        environment[FOCUS_ENVIRONMENT_VARIABLE] = str(focus_path)
     app_path = Path(__file__).with_name("app.py").resolve()
     command = [
         sys.executable,

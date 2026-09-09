@@ -1,0 +1,2 @@
+protein_identifier	protein_name	category	evidence_type	organism	source	enabled	note
+Q9SA03	FB27_ARATH	F-box E3-associated protein	reviewed project seed	Arabidopsis thaliana	Replace with reviewed project authority	true	Example only; add, remove or disable rows for your analysis.

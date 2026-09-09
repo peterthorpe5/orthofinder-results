@@ -266,6 +266,47 @@ def test_protein_search_without_sequence_alias_relation(
 
 
 @pytest.mark.parametrize(
+    ("query", "match_mode", "expected_source", "expected_identifier"),
+    [
+        ("Q9SA03", "EXACT", "UNIPROT_ACCESSION", "Q9SA03"),
+        ("FB27_ARATH", "EXACT", "UNIPROT_ENTRY", "FB27_ARATH"),
+        ("q9s", "CONTAINS", "UNIPROT_ACCESSION", "Q9SA03"),
+        ("arath", "CONTAINS", "UNIPROT_ENTRY", "FB27_ARATH"),
+    ],
+)
+def test_protein_search_resolves_controlled_uniprot_aliases(
+    application_resource: Path,
+    query: str,
+    match_mode: str,
+    expected_source: str,
+    expected_identifier: str,
+) -> None:
+    """UniProt pipe identifiers expose bounded accession and entry aliases."""
+
+    database = application_resource / "duckdb" / "orthofinder_results.duckdb"
+    connection = duckdb.connect(str(database))
+    try:
+        connection.execute(
+            "UPDATE hog_memberships SET member_id = 'sp|Q9SA03|FB27_ARATH' "
+            "WHERE member_id = 'alpha_1'"
+        )
+        connection.execute(
+            "UPDATE sequences SET member_id = 'sp|Q9SA03|FB27_ARATH' "
+            "WHERE member_id = 'alpha_1'"
+        )
+    finally:
+        connection.close()
+    service = OrthoFinderQueryService(resource=open_resource(path=application_resource))
+    result = service.search_proteins(
+        filters=ProteinSearchFilters(query=query, match_mode=match_mode)
+    )
+    assert result.total_rows == 1
+    assert result.rows[0]["member_id"] == "sp|Q9SA03|FB27_ARATH"
+    assert result.rows[0]["match_source"] == expected_source
+    assert result.rows[0]["matched_identifier"] == expected_identifier
+
+
+@pytest.mark.parametrize(
     ("kwargs", "message"),
     [
         ({"query": ""}, "Enter a protein"),

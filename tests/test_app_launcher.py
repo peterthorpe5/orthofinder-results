@@ -25,6 +25,10 @@ def test_launcher_validates_resource_and_builds_streamlit_command(
     monkeypatch.setattr(launcher.subprocess, "run", run)
     monkeypatch.setattr(launcher, "_port_available", lambda **kwargs: True)
     log_file = tmp_path / "logs" / "app.log"
+    expected_file = tmp_path / "expected.tsv"
+    expected_file.write_text("taxon_id\treason\tsource\tincluded\n", encoding="utf-8")
+    focus_file = tmp_path / "focus.tsv"
+    focus_file.write_text("protein_identifier\nQ9SA03\n", encoding="utf-8")
     status = launcher.main(
         [
             "--resource-dir",
@@ -37,6 +41,10 @@ def test_launcher_validates_resource_and_builds_streamlit_command(
             str(log_file),
             "--taxonomy-map",
             str(taxonomy_mapping_file),
+            "--expected-taxa",
+            str(expected_file),
+            "--focus-proteins",
+            str(focus_file),
             "--headless",
             "--verbose",
         ]
@@ -53,6 +61,12 @@ def test_launcher_validates_resource_and_builds_streamlit_command(
     assert environment[launcher.LOG_ENVIRONMENT_VARIABLE] == str(log_file.resolve())
     assert environment[launcher.TAXONOMY_ENVIRONMENT_VARIABLE] == str(
         taxonomy_mapping_file.resolve()
+    )
+    assert environment[launcher.EXPECTED_TAXA_ENVIRONMENT_VARIABLE] == str(
+        expected_file.resolve()
+    )
+    assert environment[launcher.FOCUS_ENVIRONMENT_VARIABLE] == str(
+        focus_file.resolve()
     )
     assert log_file.is_file()
 
@@ -130,6 +144,28 @@ def test_requested_busy_port_and_missing_taxonomy_are_controlled(
                 str(application_resource),
                 "--server-port",
                 "8501",
+            ]
+        )
+        == 2
+    )
+    assert (
+        launcher.main(
+            [
+                "--resource-dir",
+                str(application_resource),
+                "--expected-taxa",
+                str(application_resource / "missing_expected.tsv"),
+            ]
+        )
+        == 2
+    )
+    assert (
+        launcher.main(
+            [
+                "--resource-dir",
+                str(application_resource),
+                "--focus-proteins",
+                str(application_resource / "missing_focus.tsv"),
             ]
         )
         == 2

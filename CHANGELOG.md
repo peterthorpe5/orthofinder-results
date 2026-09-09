@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+## 0.7.0 - 2026-09-09
+
+- Add a generic **Selection coverage tree** page and command-line action with
+  exact-terminal, include-clade, only-in-clade, exact-exclusion and
+  clade-exclusion predicates composed under explicit AND semantics.
+- Reject direct and indirect selector contradictions before querying groups;
+  several only-in clades use their terminal-set intersection and unresolved
+  group members make only-in tests fail closed.
+- Keep selection state independent from dataset-coverage state, distinguish
+  represented, expected-no-data, ancestor, outsider and not-expected taxa, and
+  state that expected-no-data is never evidence of biological absence.
+- Build a deterministic minimal-ancestor taxonomy tree from a pinned reviewed
+  mapping, retain stable authority or NCBI taxon identifiers, and optionally
+  compact only unary neutral lineages.
+- Add keyboard-equivalent node actions, synchronised last-valid controls and
+  group results, accessible colour-plus-shape styling, and a safe transition
+  from a passing group to the complete cluster explorer.
+- Export complete reproducibility packages containing taxonomy, mapping,
+  expected-universe, predicate, coverage, group and unmapped-label TSVs plus
+  Newick, style data, SVG, PDF, JSON provenance and SHA-256 checksums.
+- Add `orthofinder-results --action coverage-tree` with repeated named selector
+  options, validate-only and dry-run modes, bounded group/node controls and
+  verified atomic publication outside the immutable resource.
+- Package a versioned 43,066-record E3 seed-protein authority as the default
+  focus while keeping the query engine generic and allowing a plain or
+  gzip-compressed replacement TSV in the app and CLI.
+- Add a **Focus protein clusters** page that reports exact matching identifiers,
+  proteins, species and alias authorities, then opens any result with its focus
+  protein highlighted throughout the existing distance and visual suite.
+- Parse controlled UniProt `sp|ACCESSION|ENTRY` and `tr|ACCESSION|ENTRY` aliases
+  for exact accession or entry-name searches without heuristic identifier
+  stripping.
+- Preserve header-only group-audit TSVs for valid zero-match focus runs and
+  strengthen control-character, taxonomy topology, checksum and filesystem
+  failure validation.
+- Keep the scheduler-TMP publication wrapper testable on macOS/BSD and Linux
+  through portable UTC timestamps and an atomic publication lock around the
+  same-filesystem directory rename.
+- Extend unit, command-line and headless Streamlit end-to-end coverage to 401
+  passing tests while retaining the enforced 95% branch-coverage quality gate.
+
 ## 0.6.0 - 2026-09-08
 
 - Add a dedicated **Find a gene / protein** page that searches canonical

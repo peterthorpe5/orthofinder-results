@@ -16,7 +16,10 @@ from orthofinder_interrogation_app.evolutionary_page import (
 )
 from orthofinder_interrogation_app.launcher import (
     CACHE_ENVIRONMENT_VARIABLE,
+    EXPECTED_TAXA_ENVIRONMENT_VARIABLE,
+    FOCUS_ENVIRONMENT_VARIABLE,
     RESOURCE_ENVIRONMENT_VARIABLE,
+    TAXONOMY_ENVIRONMENT_VARIABLE,
 )
 from orthofinder_interrogation_app.report_data import load_visualisation_catalog
 from orthofinder_interrogation_app.resource import open_resource
@@ -41,9 +44,7 @@ def test_overview_group_search_and_help_routes(
     )
     assert not test.exception
     assert test.title[0].value == "OrthoFinder Interrogation"
-    assert any(
-        metric.label == "Group records" and metric.value == "4" for metric in test.metric
-    )
+    assert any(metric.label == "Group records" and metric.value == "4" for metric in test.metric)
     assert any(header.value == "Dataset summary" for header in test.header)
     assert any("Which groups contain my species?" in item.value for item in test.markdown)
     test.sidebar.radio[0].set_value("Find groups")
@@ -102,9 +103,156 @@ def test_all_distance_results_route_exports_complete_selection(
     assert test.dataframe
     assert len(test.get("download_button")) >= 2
     assert any(
-        "one preferred stored result per cluster" in markdown.value
-        for markdown in test.markdown
+        "one preferred stored result per cluster" in markdown.value for markdown in test.markdown
     )
+
+
+def test_focus_protein_clusters_use_custom_authority_and_open_visuals(
+    application_resource: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A replacement focus list finds clusters and exposes the complete visual suite."""
+
+    focus = tmp_path / "focus.tsv"
+    focus.write_text(
+        "protein_identifier\tprotein_name\tcategory\nalpha_1\tAlpha protein\tE3 fixture\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(FOCUS_ENVIRONMENT_VARIABLE, str(focus))
+    test = _application_test(
+        application_resource=application_resource,
+        monkeypatch=monkeypatch,
+    )
+    test.sidebar.radio[0].set_value("Focus protein clusters")
+    test.run()
+    assert not test.exception
+    assert any(header.value == "Focus protein clusters" for header in test.header)
+    assert any(
+        metric.label == "Matching clusters" and metric.value == "1" for metric in test.metric
+    )
+    assert test.dataframe
+    open_button = next(
+        button
+        for button in test.button
+        if button.label == "Show this focus cluster's complete visual suite"
+    )
+    open_button.click()
+    test.run()
+    assert not test.exception
+    assert any("Highlighting configured focus protein" in info.value for info in test.info)
+    assert len(test.get("plotly_chart")) >= 5
+
+
+def test_selection_coverage_tree_keeps_controls_tree_and_groups_synchronised(
+    application_resource: Path,
+    taxonomy_mapping_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Headless selector changes update one last-valid tree, summary and group audit."""
+
+    focus = tmp_path / "focus.tsv"
+    focus.write_text("protein_identifier\nalpha_1\n", encoding="utf-8")
+    monkeypatch.setenv(FOCUS_ENVIRONMENT_VARIABLE, str(focus))
+    monkeypatch.setenv(TAXONOMY_ENVIRONMENT_VARIABLE, str(taxonomy_mapping_file))
+    test = _application_test(
+        application_resource=application_resource,
+        monkeypatch=monkeypatch,
+    )
+    test.sidebar.radio[0].set_value("Selection coverage tree")
+    test.run()
+    assert not test.exception
+    assert any(header.value == "Selection coverage tree" for header in test.header)
+    include = next(widget for widget in test.multiselect if widget.label == "Include clades")
+    exclude = next(widget for widget in test.multiselect if widget.label == "Exclude exact taxa")
+    include.set_value(["Target clade | unranked | ID 10"])
+    exclude.set_value(["Species gamma | unranked | ID 103"])
+    build = next(
+        button for button in test.button if button.label == "Build selection coverage tree"
+    )
+    build.click()
+    test.run()
+    assert not test.exception
+    assert any(metric.label == "Groups passing" and metric.value == "1" for metric in test.metric)
+    assert test.get("plotly_chart")
+    assert any(
+        "Require at least one member from clade Target clade" in item.value
+        for item in test.markdown
+    )
+    assert len(test.dataframe) >= 2
+    assert len(test.get("download_button")) >= 8
+    required = next(widget for widget in test.multiselect if widget.label == "Required exact taxa")
+    required.set_value(["Species alpha | unranked | ID 101"])
+    exclude = next(widget for widget in test.multiselect if widget.label == "Exclude exact taxa")
+    exclude.set_value(
+        [
+            "Species gamma | unranked | ID 103",
+            "Species alpha | unranked | ID 101",
+        ]
+    )
+    next(
+        button for button in test.button if button.label == "Build selection coverage tree"
+    ).click()
+    test.run()
+    assert test.error and "same exact taxon" in test.error[-1].value
+    assert any(metric.label == "Groups passing" and metric.value == "1" for metric in test.metric)
+    next(
+        button for button in test.button if button.label == "Open passing group in cluster explorer"
+    ).click()
+    test.run()
+    assert not test.exception
+    assert any(header.value == "Explore one cluster" for header in test.header)
+
+
+def test_focus_and_coverage_pages_explain_empty_or_invalid_authorities(
+    application_resource: Path,
+    taxonomy_mapping_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Page-level failure states remain visible and distinguish absence from error."""
+
+    monkeypatch.delenv(TAXONOMY_ENVIRONMENT_VARIABLE, raising=False)
+    monkeypatch.delenv(EXPECTED_TAXA_ENVIRONMENT_VARIABLE, raising=False)
+    test = _application_test(
+        application_resource=application_resource,
+        monkeypatch=monkeypatch,
+    )
+    test.sidebar.radio[0].set_value("Selection coverage tree")
+    test.run()
+    assert not test.exception
+    assert any("Load a reviewed taxonomy mapping" in item.value for item in test.warning)
+
+    monkeypatch.setenv(TAXONOMY_ENVIRONMENT_VARIABLE, str(taxonomy_mapping_file))
+    monkeypatch.setenv(
+        EXPECTED_TAXA_ENVIRONMENT_VARIABLE,
+        str(tmp_path / "missing_expected_taxa.tsv"),
+    )
+    test = _application_test(
+        application_resource=application_resource,
+        monkeypatch=monkeypatch,
+    )
+    test.sidebar.radio[0].set_value("Selection coverage tree")
+    test.run()
+    assert not test.exception
+    assert any("Expected-taxon universe could not be used" in item.value for item in test.error)
+
+    monkeypatch.delenv(EXPECTED_TAXA_ENVIRONMENT_VARIABLE, raising=False)
+    absent_focus = tmp_path / "absent_focus.tsv"
+    absent_focus.write_text(
+        "protein_identifier\nnot_present_in_resource\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(FOCUS_ENVIRONMENT_VARIABLE, str(absent_focus))
+    test = _application_test(
+        application_resource=application_resource,
+        monkeypatch=monkeypatch,
+    )
+    test.sidebar.radio[0].set_value("Focus protein clusters")
+    test.run()
+    assert not test.exception
+    assert any("No configured focus protein matched" in item.value for item in test.warning)
 
 
 def test_protein_search_opens_focused_cluster_and_distance_table(
@@ -122,27 +270,20 @@ def test_protein_search_opens_focused_cluster_and_distance_table(
     assert not test.exception
     assert any(header.value == "Find a gene or protein" for header in test.header)
     query_input = next(
-        widget
-        for widget in test.text_input
-        if widget.label == "Protein or OrthoFinder internal ID"
+        widget for widget in test.text_input if widget.label == "Protein or OrthoFinder internal ID"
     )
     query_input.set_value("alpha_1")
-    next(
-        button for button in test.button if button.label == "Find this protein"
-    ).click()
+    next(button for button in test.button if button.label == "Find this protein").click()
     test.run()
     assert not test.exception
     assert any(
-        metric.label == "Matching cluster records" and metric.value == "1"
-        for metric in test.metric
+        metric.label == "Matching cluster records" and metric.value == "1" for metric in test.metric
     )
     assert any(
-        subheader.value == "Distances from the requested protein"
-        for subheader in test.subheader
+        subheader.value == "Distances from the requested protein" for subheader in test.subheader
     )
     assert any(
-        metric.label == "Proteins compared" and metric.value == "2"
-        for metric in test.metric
+        metric.label == "Proteins compared" and metric.value == "2" for metric in test.metric
     )
     assert len(test.get("plotly_chart")) >= 9
     assert len(test.get("download_button")) >= 4
@@ -243,10 +384,7 @@ def test_empty_and_populated_cluster_comparison_routes(
     test.run()
     assert not test.exception
     assert len(test.get("plotly_chart")) >= 4
-    assert any(
-        subheader.value == "Comparison data and provenance"
-        for subheader in test.subheader
-    )
+    assert any(subheader.value == "Comparison data and provenance" for subheader in test.subheader)
 
 
 def test_schema3_pipeline_to_lazy_cluster_explorer_end_to_end(

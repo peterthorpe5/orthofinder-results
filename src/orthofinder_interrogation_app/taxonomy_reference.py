@@ -127,9 +127,13 @@ def _candidate_row(
         {
             "workflow_species_label": label,
             "source_species_name": source_name,
+            "source_name_original": label,
             "mapping_source": "NCBI Taxonomy taxdump",
             "source_date": source_date,
             "source_version": source_version,
+            "taxonomy_authority": "NCBI Taxonomy",
+            "taxonomy_release": source_version,
+            "role": "input",
         }
     )
     if not matches:
@@ -167,6 +171,7 @@ def _candidate_row(
         {
             "accepted_species_name": scientific_names[taxon_id],
             "ncbi_taxon_id": taxon_id,
+            "authority_taxon_id": taxon_id,
             "parent_taxon_id": parent_id or "",
             "parent_taxon_name": scientific_names[parent_id] if parent_id else "",
             "lineage_taxon_ids": ";".join(str(value) for value in lineage),

@@ -3,8 +3,10 @@
 [![CI](https://github.com/peterthorpe5/orthofinder-results/actions/workflows/ci.yml/badge.svg)](https://github.com/peterthorpe5/orthofinder-results/actions/workflows/ci.yml)
 
 `orthofinder-results` turns a completed OrthoFinder result directory into a
-versioned, queryable and portable analytical resource. It is intentionally a
-generic package: no E3-ligase assumptions are built into its parsers or schema.
+versioned, queryable and portable analytical resource. Its parsers, schema and
+selection engine remain dataset-generic. For this project, the viewer ships a
+replaceable E3 seed-protein authority as its default focus; a match is a
+prioritisation flag, not an inferred functional annotation.
 
 The package supports completed OrthoFinder 2 and OrthoFinder 3 layouts. For
 OrthoFinder 3, hierarchical orthogroups are the primary authority (recorded as
@@ -146,7 +148,7 @@ when the package is used only to build resources on a cluster.
 
 ## Interactive application
 
-Version 0.6.0 provides the read-only standalone application. It opens either a
+Version 0.7.0 provides the read-only standalone application. It opens either a
 completed resource directory or its `duckdb/orthofinder_results.duckdb` file:
 
 ```bash
@@ -174,10 +176,30 @@ checksum and analysis controls, gzip-compressed, atomically published with
 user-only permissions and reproducible. The app refuses to put its cache inside
 a completed resource.
 
+The packaged focus authority lives in
+[`src/orthofinder_interrogation_app/data`](src/orthofinder_interrogation_app/data).
+It contains 43,066 E3 seed accessions with category, evidence, organism and
+source provenance. Copy and edit `custom_focus_proteins.template.tsv`, then use
+the replacement without changing code:
+
+```bash
+orthofinder-interrogation-app \
+  --resource-dir /path/to/completed/resource \
+  --focus-proteins /path/to/my_focus_proteins.tsv
+```
+
+Matching is exact against canonical member IDs, OrthoFinder internal IDs and
+unambiguous accession/entry fields in canonical UniProt pipe identifiers. The
+authority does not infer new E3 annotations. The default file and every custom
+file are checksum-bound in downstream selection manifests.
+
 The application provides:
 
 - a guided Summary landing page organised around biological questions, with
   contextual help, readable table headings and an expandable scientific glossary;
+- a **Focus protein clusters** page that starts from the packaged 43,066-record
+  E3 seed authority, reports exact matched accessions and cluster membership,
+  and accepts a replacement TSV without code changes;
 - a dedicated gene/protein search across canonical membership identifiers and
   available OrthoFinder internal IDs, returning every matching HOG level and flat
   orthogroup before opening a protein-focused cluster view;
@@ -200,8 +222,11 @@ The application provides:
   displayed distributions and independent PCoA small multiples;
 - an **All distance results** page for selecting, previewing and exporting the
   required biological, statistical and provenance columns across every cluster
-  with a successful persisted distance calculation; and
-- a three-part expandable guide beside every graph describing what it shows,
+  with a successful persisted distance calculation;
+- a generic **Selection coverage tree** that combines exact, clade, only-in and
+  exclusion predicates, evaluates E3-focus clusters by default, keeps selection
+  state separate from dataset coverage, and exports a reconciled audit package;
+- and a three-part expandable guide beside every graph describing what it shows,
   how to interpret it and its most important limitation.
 
 Every downloadable application table is offered as both UTF-8 TSV and formatted
@@ -284,6 +309,59 @@ semantics:
 
 Exclusive results are claims only about species sampled in this OrthoFinder run,
 not universal biological absence claims.
+
+### Selection coverage tree
+
+This workflow uses the reviewed mapping as a versioned offline taxonomy
+authority. It does not draw the OrthoFinder species tree or a group gene tree.
+Every selected predicate is joined by logical AND:
+
+| Selector | Passing-group requirement |
+|---|---|
+| Required exact taxon | Every selected reviewed terminal occurs. |
+| Include clade | Each selected clade contributes at least one reviewed terminal; outsiders are retained and reported. |
+| Only in clade | Every mapped terminal lies within the selected clade; unresolved members fail closed. Multiple clades use their intersection. |
+| Exclude exact taxon | No selected reviewed terminal occurs. |
+| Exclude clade | No reviewed descendant of the selected clade occurs. |
+
+The expected-taxon universe is independent of those selectors. By default it
+contains every reviewed species supplied to the OrthoFinder run. A replacement
+TSV can include reviewed terminal taxa expected by a sampling plan even when
+they have no input data. **Expected no data** means only “not represented in
+this imported dataset”; it is not evidence that a gene or biological function
+is absent.
+
+The application evaluates clusters containing configured focus proteins by
+default, which centres the current project on E3-containing groups. Clear the
+focus checkbox to evaluate the complete selected group authority. Downloadable
+packages contain reconciled TSV audits, Newick plus a separate style table,
+SVG, PDF, a JSON selection manifest and SHA-256 checksums.
+
+The equivalent command-line workflow supports repeated named selectors:
+
+```bash
+orthofinder-results \
+  --action coverage-tree \
+  --resource-dir /path/to/completed/resource \
+  --taxonomy-map /path/to/reviewed_taxonomy_mapping.tsv \
+  --expected-taxa /path/to/expected_taxa.tsv \
+  --focus-proteins /path/to/my_focus_proteins.tsv \
+  --require-exact-tax-id 3702 \
+  --include-clade-tax-id 33090 \
+  --exclude-clade-tax-id 4751 \
+  --coverage-group-type HOG \
+  --coverage-hierarchy-node N0 \
+  --coverage-max-groups 100000 \
+  --output-dir /persistent/project/selection_coverage/e3_plants_v1
+```
+
+Omit `--focus-proteins` to use the packaged E3 authority. Add
+`--coverage-all-groups` for a complete non-focus scope. `--validate-only`
+checks authorities and predicates without group querying or output;
+`--dry-run` performs the bounded query and export construction without writing.
+The output must be a new path outside the completed resource. See
+[`docs/selection_coverage_tree.md`](docs/selection_coverage_tree.md) for the
+export contract and scheduler-TMP workflow.
 
 ## Inspect before running
 
@@ -492,29 +570,30 @@ Open the database with:
 duckdb /path/to/output/duckdb/orthofinder_results.duckdb
 ```
 
-## Scope of version 0.6.0
+## Scope of version 0.7.0
 
-Version 0.6.0 adds protein-centred discovery, direct cluster opening, linked
-highlighting and focused exact-distance exports to the v0.5 formatted-download
-and dataset-wide distance-results foundation. The standalone app owns generic OrthoFinder
-interrogation: group membership, copy number, species breadth, reviewed
+Version 0.7.0 adds a replaceable protein-focus authority and a reproducible
+taxonomy selection/coverage tree to the v0.6 protein-centred, distance and
+visualisation foundation. The E3 seed list is the current project default, but
+the selection, mapping, group and tree engines remain generic. The standalone
+app owns OrthoFinder group membership, copy number, species breadth, reviewed
 taxonomy, distances, compactness, trees and within-run comparison. Explicit
 nested-HOG interrogation and cross-run cluster lineage (stable overlap scores
-plus split/merge classification) remain later, separately tested generic
-layers.
+plus split/merge classification) remain later, separately tested generic layers.
 
 The dataset-wide page deliberately reports persisted resource results only. It
 does not silently mix calculations from a user's mutable on-demand sidecar into
 an immutable run-level export. Rebuild or publish those additional calculations
 before treating them as dataset-wide authority.
 
-Protein lookup searches identifiers stored by OrthoFinder; it does not infer gene
-symbols or descriptive aliases from external annotation databases. Exact search
-is case-sensitive, while the optional contains mode is literal, case-insensitive
-and browser-bounded. A selected protein is always retained in a new schema-3
-bounded tree calculation. If a schema-2 pilot matrix omitted that protein, the app
-reports the limitation because the immutable sample cannot be enlarged without a
-portable gene tree.
+Protein lookup searches identifiers stored by OrthoFinder plus controlled
+accession and entry-name fields parsed from canonical UniProt pipe identifiers;
+it does not infer gene symbols or descriptive aliases from external annotation
+databases. Exact search is case-sensitive, while the optional contains mode is
+literal, case-insensitive and browser-bounded. A selected protein is always
+retained in a new schema-3 bounded tree calculation. If a schema-2 pilot matrix
+omitted that protein, the app reports the limitation because the immutable
+sample cannot be enlarged without a portable gene tree.
 
 E3-ligase ranking, expression, experimental evidence, structures, conserved
 ligandable pockets and chemistry starting points remain in the separate E3
