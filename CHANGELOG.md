@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.8.1 - 2026-09-10
+
+- Attach matching checksum-verified portable tree payloads to persisted DuckDB
+  distance analyses, restoring the branch-length phylogram for precomputed E3
+  clusters without recalculating their distance matrices.
 - Fix the E3 Slurm wrapper to pass the persistent formal output to the pipeline
   while retaining all resource construction beneath scheduler `TMPDIR`; this
   removes a conflict with the persistent-output safety policy.

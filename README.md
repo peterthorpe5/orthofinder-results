@@ -184,6 +184,10 @@ outputs and downstream parsing guidance.
 Version 0.8.0 provides the read-only standalone application. It opens either a
 completed resource directory or its `duckdb/orthofinder_results.duckdb` file:
 
+Version 0.8.1 also attaches each matching checksum-verified portable tree to
+an existing persisted distance matrix, so precomputed E3 clusters retain their
+branch-length phylogram without rebuilding the completed resource.
+
 ```bash
 orthofinder-interrogation-app \
   --resource-dir /path/to/completed/resource

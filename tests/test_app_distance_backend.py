@@ -108,6 +108,7 @@ def test_provider_prefers_persisted_pairs_and_schema2_report(
     schema3_resource: Path,
     application_resource: Path,
     persistent_test_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Existing exact pair rows and the old pilot matrix remain first-class inputs."""
 
@@ -125,7 +126,24 @@ def test_provider_prefers_persisted_pairs_and_schema2_report(
     ).analyse(key=_key(run_id="schema3-run"), max_members=3)
     assert persisted.source == "PERSISTED_DUCKDB_DISTANCES"
     assert persisted.cache_status == "NOT_APPLICABLE"
-    assert persisted.tree_authority == ""
+    assert persisted.tree_authority == "RESOLVED_GENE_TREE"
+    assert persisted.visual_entry["phylogram"]["status"] == (
+        "COMPLETE_PRUNED_PHYLOGRAM"
+    )
+    assert persisted.visual_entry["phylogram"]["treeId"] == "OG0000001"
+
+    with monkeypatch.context() as patch:
+        patch.setattr(schema3_service, "get_portable_tree", lambda **_: None)
+        no_tree = DistanceAnalysisProvider(
+            service=schema3_service,
+            cache_dir=persistent_test_root / "schema3_no_tree_cache",
+            report_catalog=schema3_catalog,
+        ).analyse(key=_key(run_id="schema3-run"), max_members=3)
+    assert no_tree.source == "PERSISTED_DUCKDB_DISTANCES"
+    assert no_tree.tree_authority == ""
+    assert no_tree.visual_entry["phylogram"]["status"] == (
+        "UNAVAILABLE_NO_NORMALISED_RESOLVED_TREE"
+    )
 
     schema2_service = _service(application_resource)
     report_path = schema2_service.resource.report_path

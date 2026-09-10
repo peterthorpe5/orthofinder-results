@@ -172,6 +172,10 @@ class DistanceAnalysisProvider:
             required_members=required,
         )
         if persisted and persisted_has_required:
+            tree_record, newick_text = self._portable_tree_authority(
+                key=key,
+                group=group,
+            )
             return self._analysis_from_rows(
                 key=key,
                 group=group,
@@ -179,8 +183,8 @@ class DistanceAnalysisProvider:
                 summary=group,
                 nearest_neighbours=nearest_neighbours,
                 source="PERSISTED_DUCKDB_DISTANCES",
-                tree_record=None,
-                newick_text=None,
+                tree_record=tree_record,
+                newick_text=newick_text,
             )
         if report_is_exact and report_has_required:
             return _analysis_from_report(
@@ -189,9 +193,9 @@ class DistanceAnalysisProvider:
                 entry=report_entry,
             )
 
-        tree_record = self.service.get_portable_tree(
+        tree_record, newick_text = self._portable_tree_authority(
             key=key,
-            legacy_orthogroup_id=str(group.get("legacy_orthogroup_id", "")),
+            group=group,
         )
         if tree_record is None:
             if required and (persisted or report_is_exact):
@@ -226,12 +230,8 @@ class DistanceAnalysisProvider:
                 _LOGGER.info("Loaded lazy group analysis from cache: %s", cache_path)
                 return replace(cached, cache_status="CACHE_HIT")
 
-        newick_text = decode_newick_payload(
-            payload=str(tree_record["newick_payload"]),
-            payload_encoding=str(tree_record["payload_encoding"]),
-            expected_size=int(tree_record["source_size_bytes"]),
-            expected_sha256=str(tree_record["source_sha256"]),
-        )
+        if newick_text is None:  # pragma: no cover - paired helper contract
+            raise AssertionError("Portable tree record lacks decoded Newick text.")
         declared_member_count = int(group.get("member_count", 0))
         if declared_member_count > MAX_GROUP_MEMBER_ROWS:
             raise InputValidationError(
@@ -302,6 +302,43 @@ class DistanceAnalysisProvider:
         )
         return analysis
 
+    def _portable_tree_authority(
+        self,
+        *,
+        key: GroupKey,
+        group: Mapping[str, Any],
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        """Return a matching checksum-verified portable tree and Newick text.
+
+        Args:
+            key: Composite run-scoped group identity.
+            group: Complete group-statistics record containing any parent orthogroup.
+
+        Returns:
+            Matching tree record and decoded Newick text, or two ``None`` values
+            when the resource has no matching portable tree.
+        """
+
+        tree_record = self.service.get_portable_tree(
+            key=key,
+            legacy_orthogroup_id=str(group.get("legacy_orthogroup_id", "")),
+        )
+        if tree_record is None:
+            return None, None
+        newick_text = decode_newick_payload(
+            payload=str(tree_record["newick_payload"]),
+            payload_encoding=str(tree_record["payload_encoding"]),
+            expected_size=int(tree_record["source_size_bytes"]),
+            expected_sha256=str(tree_record["source_sha256"]),
+        )
+        _LOGGER.info(
+            "Attached checksum-verified portable tree: group=%s, authority=%s, tree=%s",
+            key.display_label(),
+            tree_record["tree_type"],
+            tree_record["tree_id"],
+        )
+        return tree_record, newick_text
+
     def _report_entry(self, *, key: GroupKey) -> dict[str, Any] | None:
         """Return a report visual for one exact group key when present."""
 
@@ -343,7 +380,7 @@ class DistanceAnalysisProvider:
             raw_nodes, raw_edges = normalise_newick_text(
                 newick_text=newick_text,
                 run_id=key.run_id,
-                tree_type="RESOLVED_GENE_TREE",
+                tree_type=tree_authority,
                 tree_id=str(tree_record["tree_id"]),
                 source_label=str(tree_record["source_path"]),
             )
