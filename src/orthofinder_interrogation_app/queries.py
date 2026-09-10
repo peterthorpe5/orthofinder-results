@@ -36,6 +36,7 @@ MAX_ALL_DISTANCE_RESULTS = 250_000
 MAX_PROTEIN_SEARCH_ROWS = 1_000
 MAX_FOCUS_CLUSTER_ROWS = 250_000
 MAX_GROUP_SPECIES_COLLECTION_ROWS = 5_000_000
+MAX_BENCHMARK_MARKER_ROWS = 250_000
 BENCHMARK_METRICS = (
     "mean_distance",
     "median_distance",
@@ -322,6 +323,110 @@ class OrthoFinderQueryService:
         )
         return tuple(rows)
 
+    def benchmark_profile_markers(
+        self,
+        *,
+        profile_ids: tuple[str, ...],
+        maximum: int = MAX_BENCHMARK_MARKER_ROWS,
+    ) -> tuple[dict[str, Any], ...]:
+        """Return matched genes and proteins defining selected benchmark profiles.
+
+        E3 focus-protein matches and Arabidopsis reference-marker matches use
+        different source relations. This method exposes a single bounded,
+        provenance-preserving result without inferring annotations from identifiers.
+
+        Args:
+            profile_ids: Exact stored biological profile identifiers.
+            maximum: Maximum marker-to-cluster rows materialised by the app.
+
+        Returns:
+            One distinct marker-to-cluster match for each selected profile.
+
+        Raises:
+            InputValidationError: If identifiers or the requested bound are unsafe.
+        """
+
+        selected = _validated_text_values(
+            values=profile_ids,
+            label="benchmark profile identifiers",
+            maximum_count=10_000,
+        )
+        if not selected:
+            return ()
+        if not isinstance(maximum, int) or isinstance(maximum, bool):
+            raise InputValidationError("maximum must be an integer.")
+        if not 1 <= maximum <= MAX_BENCHMARK_MARKER_ROWS:
+            raise InputValidationError(
+                "maximum must be between 1 and "
+                f"{MAX_BENCHMARK_MARKER_ROWS:,}."
+            )
+        if not self.has_relation(relation="benchmark_group_profiles"):
+            return ()
+        sources: list[str] = []
+        if self.has_relation(relation="benchmark_marker_matches"):
+            sources.append(
+                "SELECT p.profile_id, p.profile_class, p.profile_subclass, "
+                "p.group_type, p.hierarchy_node, p.group_id, m.marker_id, "
+                "m.protein_identifier, m.protein_entry, m.marker_name, "
+                "m.domain_architecture, m.matched_member_id, "
+                "m.matched_species_label, m.evidence_type, m.source_title, "
+                "m.source_doi, m.source_version, m.benchmark_authority_name "
+                "AS authority_name FROM benchmark_group_profiles AS p JOIN "
+                "benchmark_marker_matches AS m USING "
+                "(run_id, group_type, hierarchy_node, group_id) WHERE "
+                "p.membership_role = 'TARGET' AND list_contains("
+                "string_split(coalesce(p.marker_ids, ''), ';'), m.marker_id)"
+            )
+        if self.has_relation(relation="e3_seed_matches"):
+            sources.append(
+                "SELECT p.profile_id, p.profile_class, p.profile_subclass, "
+                "p.group_type, p.hierarchy_node, p.group_id, e.seed_id AS marker_id, "
+                "e.seed_id AS protein_identifier, '' AS protein_entry, "
+                "e.seed_protein_names AS marker_name, '' AS domain_architecture, "
+                "e.matched_member_id, e.matched_species_label, e.seed_evidence_type "
+                "AS evidence_type, e.seed_source AS source_title, '' AS source_doi, "
+                "'' AS source_version, e.focus_authority_name AS authority_name FROM "
+                "benchmark_group_profiles AS p JOIN e3_seed_matches AS e USING "
+                "(run_id, group_type, hierarchy_node, group_id) WHERE "
+                "p.membership_role = 'TARGET' AND p.profile_class = 'E3' AND "
+                "list_contains(string_split(coalesce(p.marker_ids, ''), ';'), e.seed_id)"
+            )
+        if not sources:
+            return ()
+        placeholders = ", ".join("?" for _ in selected)
+        union_sql = " UNION ALL ".join(sources)
+        count = int(
+            self._query(
+                sql=(
+                    "SELECT count(*) AS row_count FROM (SELECT DISTINCT * FROM ("
+                    f"{union_sql}) AS marker_union WHERE profile_id IN ({placeholders})) "
+                    "AS selected_markers"
+                ),
+                parameters=selected,
+            )[0]["row_count"]
+        )
+        if count > maximum:
+            raise InputValidationError(
+                f"Selected benchmark profiles contain {count:,} marker-to-cluster rows; "
+                f"the application limit is {maximum:,}. Select fewer profiles."
+            )
+        rows = self._query(
+            sql=(
+                "SELECT DISTINCT * FROM ("
+                f"{union_sql}) AS marker_union WHERE profile_id IN ({placeholders}) "
+                "ORDER BY profile_class, profile_subclass, marker_id, group_type, "
+                "hierarchy_node, group_id, matched_member_id"
+            ),
+            parameters=selected,
+        )
+        _LOGGER.info(
+            "Benchmark marker catalogue loaded: run=%s, profiles=%s, rows=%s",
+            self.resource.run_id,
+            len(selected),
+            len(rows),
+        )
+        return tuple(rows)
+
     def benchmark_distribution(
         self,
         *,
@@ -435,8 +540,11 @@ class OrthoFinderQueryService:
         return tuple(
             self._query(
                 sql=(
-                    "SELECT * FROM benchmark_cluster_classifications "
-                    "ORDER BY group_type, hierarchy_node, group_id"
+                    "SELECT c.*, r.profile_ids, r.profile_classes, "
+                    "r.profile_subclasses FROM benchmark_cluster_classifications AS c "
+                    "JOIN benchmark_cluster_results AS r USING "
+                    "(run_id, group_type, hierarchy_node, group_id) "
+                    "ORDER BY c.group_type, c.hierarchy_node, c.group_id"
                 ),
                 parameters=(),
             )
@@ -1646,6 +1754,45 @@ def _literal_contains(*, value: str) -> str:
 
     escaped = value.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"%{escaped}%"
+
+
+def _validated_text_values(
+    *, values: Sequence[str], label: str, maximum_count: int
+) -> tuple[str, ...]:
+    """Return stripped, unique and bounded query values.
+
+    Args:
+        values: Candidate exact text values.
+        label: Plain-language collection name for validation errors.
+        maximum_count: Greatest accepted number of distinct values.
+
+    Returns:
+        Values in first-seen order after surrounding whitespace is removed.
+
+    Raises:
+        InputValidationError: If the collection or any value is unsafe.
+    """
+
+    if isinstance(values, (str, bytes)):
+        raise InputValidationError(f"{label} must be a sequence of exact text values.")
+    if not isinstance(maximum_count, int) or isinstance(maximum_count, bool):
+        raise InputValidationError("maximum_count must be an integer.")
+    if maximum_count < 1:
+        raise InputValidationError("maximum_count must be positive.")
+    normalised: list[str] = []
+    for value in values:
+        if not isinstance(value, str):
+            raise InputValidationError(f"Every {label} value must be text.")
+        stripped = value.strip()
+        if not stripped or len(stripped) > 512 or "\x00" in stripped:
+            raise InputValidationError(f"A {label} value is empty or unsafe.")
+        if stripped not in normalised:
+            normalised.append(stripped)
+    if len(normalised) > maximum_count:
+        raise InputValidationError(
+            f"At most {maximum_count:,} {label} values may be requested."
+        )
+    return tuple(normalised)
 
 
 def _key_parameters(*, key: GroupKey) -> tuple[str, str, str, str]:

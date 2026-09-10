@@ -270,6 +270,41 @@ GRAPH_GUIDANCE = {
             "or dispersed truths. A cluster can belong to more than one biological profile."
         ),
     ),
+    "benchmark_marker_coverage": GraphGuidance(
+        title="Profile-marker cluster coverage",
+        shows=(
+            "Each bar is one profile-defining E3 seed or Arabidopsis reference marker. "
+            "Bar length is the number of distinct OrthoFinder clusters that contained an "
+            "exact matched protein."
+        ),
+        interpretation=(
+            "Longer bars identify markers represented in several retained clusters. Hover to "
+            "see matched-protein and sampled-species counts, then use the table to inspect the "
+            "exact group and protein identifiers."
+        ),
+        limitation=(
+            "This is mapping coverage, not expression, copy number or evolutionary dispersion. "
+            "Only enabled authority markers matched in this exact dataset appear."
+        ),
+    ),
+    "benchmark_classification": GraphGuidance(
+        title="Matched-control cluster map",
+        shows=(
+            "One point per biological target cluster. Its horizontal position is the "
+            "average-distance percentile and its vertical position is the distance-spread "
+            "percentile relative to that cluster's own matched non-focus controls."
+        ),
+        interpretation=(
+            "Points on the left are comparatively compact and points on the right are "
+            "comparatively dispersed. Low points have comparatively uniform distances; high "
+            "points are more heterogeneous. Hover to identify the cluster and its profiles."
+        ),
+        limitation=(
+            "Percentiles are calibrated separately against each cluster's small matched-control "
+            "set. With three controls they are deliberately coarse and are descriptive labels, "
+            "not FDR-controlled profile tests."
+        ),
+    ),
     "benchmark_contrast": GraphGuidance(
         title="FDR-controlled profile contrast forest plot",
         shows=(

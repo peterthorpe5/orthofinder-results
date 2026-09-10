@@ -216,6 +216,10 @@ Leave-one-out prevents a selected cluster from becoming part of its own referenc
 
 The primary machine-readable outputs are:
 
+- `tables/benchmark_marker_matches.tsv.gz`: the exact housekeeping and R/NLR
+  genes/proteins, matched run proteins, species, clusters and source provenance;
+- `tables/benchmark_group_profiles.tsv.gz`: the E3 or reference-marker genes that
+  define each biological profile and cluster;
 - `tables/benchmark_cluster_results.tsv.gz`: one row per biological target or
   matched-control cluster, with structure, distance summaries and sampling scope;
 - `tables/benchmark_contrasts.tsv.gz`: planned profile-level tests;
@@ -231,6 +235,13 @@ The primary machine-readable outputs are:
 See the [dispersion benchmark guide](docs/dispersion_benchmark.md) for the full
 scientific contract, authority provenance, output dictionary, cluster commands and
 interpretation safeguards.
+
+Version 0.9.1 is a schema-compatible viewer update for the same completed resource.
+Its calibrated-dispersion page leads with plain-language broad comparisons, adds an
+interactive matched-control cluster map, and provides a **Genes and clusters** tab.
+That tab shows the exact E3, housekeeping or R/NLR markers used, their matched
+proteins and clusters, every member of a selected cluster, and paired TSV or
+formatted-Excel downloads. It does not require a new cluster run or DuckDB transfer.
 
 ## Interactive application
 
@@ -672,7 +683,7 @@ Open the database with:
 duckdb /path/to/output/duckdb/orthofinder_results.duckdb
 ```
 
-## Scope of version 0.9.0
+## Scope of version 0.9
 
 Version 0.9.0 adds calibrated cluster-dispersion benchmarking to the v0.8.1
 complete E3 precursor. The exact 1,000-record E3 seed catalogue and Arabidopsis
@@ -681,6 +692,8 @@ both. The underlying identifier, membership, distance, tree, matching and
 statistics engines remain data driven. The standalone app owns OrthoFinder group
 membership, copy number, species breadth, reviewed taxonomy, distances,
 compactness, trees, within-run comparison and matched-background inference.
+Version 0.9.1 improves the presentation and marker/membership interrogation of the
+same schema-4 authority without changing its scientific calculations.
 Explicit nested-HOG interrogation and cross-run cluster lineage (stable overlap
 scores plus split/merge classification) remain later, separately tested generic
 layers.

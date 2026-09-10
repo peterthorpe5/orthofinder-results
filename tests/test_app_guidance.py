@@ -47,7 +47,7 @@ class _FakeStreamlit:
 def test_graph_registry_is_complete_and_plain_language() -> None:
     """Every supported graph has all three required interpretation fields."""
 
-    assert len(guidance.GRAPH_GUIDANCE) == 19
+    assert len(guidance.GRAPH_GUIDANCE) == 21
     for key, record in guidance.GRAPH_GUIDANCE.items():
         assert key
         assert record.title
@@ -89,5 +89,5 @@ def test_every_rendered_graph_has_a_guidance_panel() -> None:
     source = "\n".join(path.read_text(encoding="utf-8") for path in files)
     graph_count = source.count("st.plotly_chart(") + source.count("st.iframe(")
     guidance_count = source.count("render_graph_guidance(key=")
-    assert graph_count == 19
+    assert graph_count == 22
     assert guidance_count == graph_count

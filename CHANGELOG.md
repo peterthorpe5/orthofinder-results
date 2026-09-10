@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+## 0.9.1 - 2026-09-10
+
+- Reorganise the calibrated-dispersion page around **Results at a glance**,
+  **Genes and clusters** and **Detailed statistics**, with cautious plain-language
+  findings before the complete inferential tables.
+- Replace coded profile names in graphs and selectors with readable labels while
+  retaining every exact machine-readable profile ID in tables, downloads and hover
+  text.
+- Add an interactive matched-control cluster map showing central-divergence and
+  distance-spread percentiles, with complete compact/typical/dispersed
+  classifications available as TSV and formatted Excel.
+- Add a bounded marker-to-cluster coverage graph and gene/protein browser joining
+  E3 seed and Arabidopsis comparison authorities to their exact matched proteins,
+  species and OrthoFinder groups.
+- Expose every protein in a selected marker-containing cluster, explicitly flag the
+  profile-defining proteins, provide complete membership downloads and open the
+  cluster directly in the existing network, dispersion, PCoA, phylogram, heatmap
+  and pair-distance suite.
+- Start contrast plots with the broad E3-versus-housekeeping and E3-versus-R/NLR
+  questions, add target/reference and FDR filters, and keep all planned contrasts
+  in the complete downloads.
+- Retain schema version 4: existing version-0.9.0 completed benchmark resources are
+  directly compatible and do not need to be rebuilt or transferred again.
+
 ## 0.9.0 - 2026-09-10
 
 - Add a checksum-bound Arabidopsis comparison authority containing 13

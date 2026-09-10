@@ -150,6 +150,30 @@ biological target clusters so the application can render their full distance and
 tree visual suite. Matched-control pair matrices are summarised but not persisted,
 which prevents the database from expanding merely to support calibration.
 
+## Application interpretation and gene downloads
+
+Viewer version 0.9.1 opens an existing schema-4 benchmark resource directly; it
+does not require resource reconstruction. The calibrated-dispersion page is divided
+into three result-led tabs:
+
+- **Results at a glance** reports the broad preplanned comparisons in plain language,
+  then shows profile distributions and each target cluster's average-distance and
+  distance-spread percentiles relative to its own matched controls.
+- **Genes and clusters** lists the exact E3 seeds or Arabidopsis markers defining a
+  selected profile. It retains the marker locus, protein accession and name, matched
+  OrthoFinder member, species, cluster, evidence and source provenance. A second
+  table contains every protein in a selected cluster and flags the matched proteins
+  that define the selected profile.
+- **Detailed statistics** retains selectable raw or matched-residual distributions,
+  filtered confidence-interval forest plots, complete contrast downloads and each
+  individual cluster's empirical placement against every eligible background.
+
+Tables on the gene page have both TSV and formatted-Excel downloads. The Excel
+workbooks freeze and filter the heading row, set readable column widths and include
+the column definitions used by the interface. The marker coverage graph is bounded
+to the 40 most widely represented markers for readability, but the table and both
+downloads always retain every selected marker-to-cluster match.
+
 ## Interpretation safeguards
 
 - A significant result is evidence for a distributional difference in this run,

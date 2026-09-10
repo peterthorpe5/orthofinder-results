@@ -379,12 +379,43 @@ def benchmark_application_resource(application_resource: Path) -> Path:
     try:
         connection.execute(
             "CREATE TABLE benchmark_group_profiles AS SELECT * FROM (VALUES "
-            "('test_run','HOG','N0','N0.HOG1','E3_ALL','E3','ALL','TARGET'),"
+            "('test_run','HOG','N0','N0.HOG1','E3_ALL','E3','ALL','TARGET',"
+            "1,'seedE3','seedE3',1,'alpha_1','Species_A','e3.tsv','sha-e3'),"
             "('test_run','HOG','N0','N0.HOG2','MATCHED_NON_FOCUS',"
-            "'NON_FOCUS_CONTROL','MATCHED','MATCHED_CONTROL'),"
+            "'NON_FOCUS_CONTROL','MATCHED','MATCHED_CONTROL',0,'','',0,'','','',''),"
             "('test_run','HOG','N0','N0.HOG3','HOUSEKEEPING_ALL',"
-            "'HOUSEKEEPING','ALL','TARGET')) AS t(run_id,group_type,hierarchy_node,"
-            "group_id,profile_id,profile_class,profile_subclass,membership_role)"
+            "'HOUSEKEEPING','ALL','TARGET',1,'AT1G01010','QHK1',1,'a3','Species_A',"
+            "'benchmarks.tsv','sha-benchmark')) AS t(run_id,group_type,hierarchy_node,"
+            "group_id,profile_id,profile_class,profile_subclass,membership_role,"
+            "marker_count,marker_ids,protein_identifiers,matched_member_count,"
+            "matched_member_ids,matched_species_labels,authority_names,authority_sha256s)"
+        )
+        connection.execute(
+            "CREATE TABLE benchmark_marker_matches AS SELECT * FROM (VALUES "
+            "('test_run','HOG','N0','N0.HOG3','OG3','AT1G01010','QHK1',"
+            "'HK1_ARATH','Housekeeping fixture protein','HOUSEKEEPING','ALL','',"
+            "'a3','Species_A','PROTEIN_ID','reviewed reference','Fixture study',"
+            "'10.0000/fixture','Table 1','2026-09','benchmarks.tsv','sha-benchmark')) "
+            "AS t(run_id,group_type,hierarchy_node,group_id,legacy_orthogroup_id,"
+            "marker_id,protein_identifier,protein_entry,marker_name,benchmark_class,"
+            "benchmark_subclass,domain_architecture,matched_member_id,"
+            "matched_species_label,match_authority,evidence_type,source_title,"
+            "source_doi,source_table,source_version,benchmark_authority_name,"
+            "benchmark_authority_sha256)"
+        )
+        connection.execute(
+            "CREATE TABLE e3_seed_matches AS SELECT * FROM (VALUES "
+            "('test_run','HOG','N0','N0.HOG1','OG1','N0','seedE3','alpha_1',"
+            "'Species_A','0_0','PROTEIN_ID','Fixture E3 ligase','RING','reviewed',"
+            "'supported','Arabidopsis thaliana','reviewed seed','Fixture E3 source',"
+            "'seedE3','Arabidopsis thaliana',100,'protein','e3.tsv','sha-e3')) "
+            "AS t(run_id,group_type,hierarchy_node,group_id,legacy_orthogroup_id,"
+            "gene_tree_parent_clade,seed_id,matched_member_id,matched_species_label,"
+            "matched_internal_ids,match_authority,seed_protein_names,seed_categories,"
+            "seed_review_statuses,seed_ubiquitin_go_statuses,seed_organisms,"
+            "seed_evidence_type,seed_source,seed_sequence_identifiers,"
+            "seed_sequence_species,seed_protein_sequence_length,annotation_scope,"
+            "focus_authority_name,focus_authority_sha256)"
         )
         connection.execute(
             "CREATE TABLE benchmark_cluster_results AS SELECT * FROM (VALUES "

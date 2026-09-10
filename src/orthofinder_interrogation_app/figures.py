@@ -15,6 +15,7 @@ from plotly.subplots import make_subplots
 
 from orthofinder_results.errors import InputValidationError
 
+from .benchmark_labels import benchmark_class_label, benchmark_profile_label
 from .dispersion import PcoaGeometry, distance_class_rows, species_dispersion_rows
 
 _DEFAULT_COLOUR = "#5b6475"
@@ -631,14 +632,18 @@ def benchmark_distribution_figure(
     """
 
     figure = go.Figure()
-    profiles = sorted({str(row["profile_id"]) for row in rows})
+    profiles = sorted(
+        {str(row["profile_id"]) for row in rows},
+        key=lambda value: benchmark_profile_label(profile_id=value),
+    )
     for index, profile_id in enumerate(profiles):
         selected = [row for row in rows if str(row["profile_id"]) == profile_id]
+        display_label = benchmark_profile_label(profile_id=profile_id)
         figure.add_trace(
             go.Box(
-                x=[profile_id] * len(selected),
+                x=[display_label] * len(selected),
                 y=[float(row["metric_value"]) for row in selected],
-                name=profile_id,
+                name=display_label,
                 boxpoints="all",
                 jitter=0.35,
                 pointpos=0,
@@ -647,13 +652,18 @@ def benchmark_distribution_figure(
                 fillcolor=_series_colour(index=index),
                 opacity=0.62,
                 customdata=[
-                    [row["group_type"], row["hierarchy_node"], row["group_id"]]
+                    [
+                        profile_id,
+                        row["group_type"],
+                        row["hierarchy_node"],
+                        row["group_id"],
+                    ]
                     for row in selected
                 ],
                 hovertemplate=(
-                    "Profile=%{x}<br>Value=%{y:.6g}<br>"
-                    "Group=%{customdata[0]} | %{customdata[1]} | "
-                    "%{customdata[2]}<extra></extra>"
+                    "Profile=%{x}<br>Profile ID=%{customdata[0]}<br>"
+                    "Value=%{y:.6g}<br>Group=%{customdata[1]} | "
+                    "%{customdata[2]} | %{customdata[3]}<extra></extra>"
                 ),
             )
         )
@@ -665,6 +675,182 @@ def benchmark_distribution_figure(
         template="plotly_white",
         showlegend=False,
     )
+    return figure
+
+
+def benchmark_marker_coverage_figure(
+    *, rows: Sequence[Mapping[str, Any]], maximum: int = 40
+) -> go.Figure:
+    """Show how profile-defining markers map to clusters and proteins.
+
+    Args:
+        rows: Marker-to-cluster matches from the benchmark authority.
+        maximum: Maximum markers displayed after deterministic ranking.
+
+    Returns:
+        Horizontal cluster-count bars with matched-protein hover details.
+
+    Raises:
+        InputValidationError: If the display bound is outside one to 100.
+    """
+
+    if not isinstance(maximum, int) or isinstance(maximum, bool):
+        raise InputValidationError("maximum must be an integer.")
+    if not 1 <= maximum <= 100:
+        raise InputValidationError("maximum must be between 1 and 100.")
+    markers: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        marker_id = str(row["marker_id"])
+        marker = markers.setdefault(
+            marker_id,
+            {
+                "marker_id": marker_id,
+                "marker_name": str(row.get("marker_name", "")),
+                "clusters": set(),
+                "members": set(),
+                "species": set(),
+            },
+        )
+        marker["clusters"].add(
+            (
+                str(row["group_type"]),
+                str(row["hierarchy_node"]),
+                str(row["group_id"]),
+            )
+        )
+        marker["members"].add(str(row["matched_member_id"]))
+        marker["species"].add(str(row["matched_species_label"]))
+    ranked = sorted(
+        markers.values(),
+        key=lambda marker: (
+            len(marker["clusters"]),
+            len(marker["members"]),
+            str(marker["marker_id"]),
+        ),
+        reverse=True,
+    )[:maximum]
+    ranked.reverse()
+    labels = [
+        (
+            f"{marker['marker_id']} — {str(marker['marker_name'])[:55]}"
+            if marker["marker_name"]
+            else str(marker["marker_id"])
+        )
+        for marker in ranked
+    ]
+    figure = go.Figure(
+        go.Bar(
+            x=[len(marker["clusters"]) for marker in ranked],
+            y=labels,
+            orientation="h",
+            marker_color="#2c7fb8",
+            customdata=[
+                [
+                    marker["marker_id"],
+                    len(marker["members"]),
+                    len(marker["species"]),
+                ]
+                for marker in ranked
+            ],
+            hovertemplate=(
+                "Marker=%{customdata[0]}<br>Matched clusters=%{x:,}"
+                "<br>Matched proteins=%{customdata[1]:,}"
+                "<br>Matched species=%{customdata[2]:,}<extra></extra>"
+            ),
+        )
+    )
+    figure.update_layout(
+        title=f"Marker-to-cluster coverage (up to {maximum} markers shown)",
+        xaxis_title="Distinct matched OrthoFinder clusters",
+        yaxis_title="Profile-defining marker",
+        height=max(480, min(1_500, 180 + 28 * len(ranked))),
+        template="plotly_white",
+    )
+    figure.update_xaxes(dtick=1)
+    return figure
+
+
+def benchmark_classification_figure(*, rows: Sequence[Mapping[str, Any]]) -> go.Figure:
+    """Build an interactive map of each target against its own matched controls.
+
+    Args:
+        rows: Cluster classifications enriched with biological profile fields.
+
+    Returns:
+        Mean-distance and distance-spread percentiles for classified clusters.
+    """
+
+    classified = [
+        row
+        for row in rows
+        if row.get("status") == "CLASSIFIED"
+        and row.get("mean_distance_control_percentile") is not None
+        and row.get("distance_sd_control_percentile") is not None
+    ]
+    figure = go.Figure()
+    class_labels = sorted(
+        {
+            benchmark_class_label(profile_classes=str(row.get("profile_classes", "")))
+            for row in classified
+        }
+    )
+    for index, class_label in enumerate(class_labels):
+        selected = [
+            row
+            for row in classified
+            if benchmark_class_label(
+                profile_classes=str(row.get("profile_classes", ""))
+            )
+            == class_label
+        ]
+        figure.add_trace(
+            go.Scattergl(
+                x=[float(row["mean_distance_control_percentile"]) for row in selected],
+                y=[float(row["distance_sd_control_percentile"]) for row in selected],
+                mode="markers",
+                name=class_label,
+                marker={
+                    "size": 9,
+                    "opacity": 0.72,
+                    "color": _series_colour(index=index),
+                    "line": {"color": "#ffffff", "width": 0.6},
+                },
+                customdata=[
+                    [
+                        row["group_type"],
+                        row["hierarchy_node"],
+                        row["group_id"],
+                        row.get("profile_ids", ""),
+                        row.get("mean_distance"),
+                        row.get("distance_sd"),
+                        row.get("central_divergence_class", ""),
+                        row.get("heterogeneity_class", ""),
+                    ]
+                    for row in selected
+                ],
+                hovertemplate=(
+                    "Group=%{customdata[0]} | %{customdata[1]} | %{customdata[2]}"
+                    "<br>Profiles=%{customdata[3]}<br>Average pair distance="
+                    "%{customdata[4]:.5g}<br>Distance SD=%{customdata[5]:.5g}"
+                    "<br>Central divergence=%{customdata[6]}"
+                    "<br>Heterogeneity=%{customdata[7]}<extra></extra>"
+                ),
+            )
+        )
+    for threshold in (0.1, 0.9):
+        figure.add_vline(x=threshold, line_dash="dot", line_color="#9ca3af")
+        figure.add_hline(y=threshold, line_dash="dot", line_color="#9ca3af")
+    figure.update_layout(
+        title="Each biological cluster relative to its own matched controls",
+        xaxis_title="Average-distance percentile (left = compact; right = dispersed)",
+        yaxis_title="Distance-spread percentile (low = uniform; high = heterogeneous)",
+        height=700,
+        template="plotly_white",
+        legend_title="Biological class",
+        hovermode="closest",
+    )
+    figure.update_xaxes(range=[-0.03, 1.03], tickformat=".0%")
+    figure.update_yaxes(range=[-0.03, 1.03], tickformat=".0%")
     return figure
 
 
@@ -691,7 +877,8 @@ def benchmark_contrast_figure(
     ]
     tested.sort(key=lambda row: float(row["median_difference"]))
     labels = [
-        f"{row['target_profile_id']} vs {row['reference_profile_id']}"
+        f"{benchmark_profile_label(profile_id=str(row['target_profile_id']))} vs "
+        f"{benchmark_profile_label(profile_id=str(row['reference_profile_id']))}"
         for row in tested
     ]
     differences = [float(row["median_difference"]) for row in tested]
@@ -725,12 +912,20 @@ def benchmark_contrast_figure(
                 "visible": True,
             },
             customdata=[
-                [row["cliffs_delta"], row["p_value_two_sided"], row["fdr_q_value"]]
+                [
+                    row["target_profile_id"],
+                    row["reference_profile_id"],
+                    row["cliffs_delta"],
+                    row["p_value_two_sided"],
+                    row["fdr_q_value"],
+                ]
                 for row in tested
             ],
             hovertemplate=(
-                "Median difference=%{x:.6g}<br>Cliff's delta=%{customdata[0]:.4g}"
-                "<br>p=%{customdata[1]:.4g}<br>FDR q=%{customdata[2]:.4g}"
+                "Target ID=%{customdata[0]}<br>Reference ID=%{customdata[1]}"
+                "<br>Median difference=%{x:.6g}<br>Cliff's delta="
+                "%{customdata[2]:.4g}<br>p=%{customdata[3]:.4g}"
+                "<br>FDR q=%{customdata[4]:.4g}"
                 "<extra></extra>"
             ),
         )
@@ -769,7 +964,10 @@ def benchmark_individual_figure(
         if row.get("status") == "TESTED" and row.get("background_median") is not None
     ]
     tested.sort(key=lambda row: str(row["background_profile_id"]))
-    backgrounds = [str(row["background_profile_id"]) for row in tested]
+    backgrounds = [
+        benchmark_profile_label(profile_id=str(row["background_profile_id"]))
+        for row in tested
+    ]
     figure = go.Figure()
     for position, row in enumerate(tested):
         observed = float(row["observed_value"])

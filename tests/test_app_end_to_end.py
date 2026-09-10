@@ -127,7 +127,7 @@ def test_dispersion_benchmark_route_explains_older_resources(
     test.run()
     assert not test.exception
     assert any(
-        header.value == "Calibrated dispersion benchmarks" for header in test.header
+        header.value == "Calibrated dispersion results" for header in test.header
     )
     assert any("predates matched-background" in item.value for item in test.info)
 
@@ -146,7 +146,11 @@ def test_dispersion_benchmark_route_renders_complete_inference(
     test.run()
     assert not test.exception
     assert any(
-        header.value == "Calibrated dispersion benchmarks" for header in test.header
+        header.value == "Calibrated dispersion results" for header in test.header
+    )
+    assert any(
+        subheader.value == "Genes and proteins defining each biological profile"
+        for subheader in test.subheader
     )
     assert any(
         subheader.value == "Compare biological backgrounds"
