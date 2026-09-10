@@ -254,6 +254,52 @@ GRAPH_GUIDANCE = {
             "ranges and angles must not be compared between clusters."
         ),
     ),
+    "benchmark_distribution": GraphGuidance(
+        title="Biological-profile dispersion distributions",
+        shows=(
+            "One point per OrthoFinder cluster, grouped into E3, E3 subtype, "
+            "housekeeping-candidate, R/NLR-candidate or matched non-focus profiles."
+        ),
+        interpretation=(
+            "Compare medians, overlap and cluster-to-cluster variability. On the matched-"
+            "residual scale, positive values mean more dispersed than that cluster's own "
+            "structurally matched controls; negative values mean more compact."
+        ),
+        limitation=(
+            "The marker panels are hypotheses and reference candidates, not known compact "
+            "or dispersed truths. A cluster can belong to more than one biological profile."
+        ),
+    ),
+    "benchmark_contrast": GraphGuidance(
+        title="FDR-controlled profile contrast forest plot",
+        shows=(
+            "Median differences between planned biological profiles after each cluster is "
+            "centred on its own matched controls, with deterministic 95% bootstrap intervals."
+        ),
+        interpretation=(
+            "Positive estimates indicate greater target dispersion than the reference; "
+            "negative estimates indicate greater compactness. Red points have BH-FDR q≤0.05."
+        ),
+        limitation=(
+            "Intervals describe cluster-level sampling variation. Matching reduces measured "
+            "size/copy/species confounding but cannot remove unmeasured confounding."
+        ),
+    ),
+    "benchmark_individual": GraphGuidance(
+        title="Individual cluster versus empirical backgrounds",
+        shows=(
+            "The selected cluster and the median of each eligible background, joined by a "
+            "line. Hover text supplies percentile, empirical p value, FDR q value and sample size."
+        ),
+        interpretation=(
+            "Read the selected cluster relative to its own matched controls first, then compare "
+            "its matched residual with pooled E3, housekeeping, R/NLR and E3 subtype backgrounds."
+        ),
+        limitation=(
+            "Individual empirical tests can be coarse for small backgrounds. Leave-one-out is "
+            "used when the selected cluster belongs to the comparison profile."
+        ),
+    ),
 }
 
 

@@ -37,3 +37,26 @@ misspelling of *Leishmania major* must be confirmed against the original FASTA
 provenance before it can support descendant or exclusivity claims. Any other
 dataset receives a fresh label-derived review template; this file is never a
 global species list.
+
+## Arabidopsis dispersion comparison authority
+
+`arabidopsis_dispersion_benchmarks.tsv` is the default, replaceable marker
+authority for calibrated dispersion analyses. It contains 112 exact reviewed
+Arabidopsis protein identifiers: 13 housekeeping-reference candidates and 99
+R/NLR candidates. Its SHA-256 checksum is
+`33f30fcb31966dfde4136a8140bb9db00ada078b7e0ed01da6be73301b9a8b6f`.
+
+The housekeeping panel contains five stable-expression references drawn from
+Czechowski et al. (2005) plus eight conventional core-cellular reference
+candidates. The R/NLR panel is the exact intersection of the Col-0/Araport11 loci
+listed in Van de Weyer et al. (2019), supplementary table S3a, with reviewed
+Arabidopsis proteins in UniProt release 2026_03. Source title, DOI, table, release,
+class and subclass remain attached to every marker row.
+
+These labels define comparison panels and hypotheses; they do not assert that a
+matched cluster is compact or dispersed. The pipeline tests that proposition from
+the selected OrthoFinder dataset and preserves unmatched markers in a complete
+audit. To use another species or panel, copy the TSV, retain its exact headings,
+replace the records with reviewed protein identifiers and pass it through
+`--benchmark-proteins`. The package never transfers Arabidopsis classifications to
+another dataset by identifier spelling or taxonomic inference.

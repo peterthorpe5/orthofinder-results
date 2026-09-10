@@ -11,7 +11,7 @@ import pyarrow.parquet as pq
 import pytest
 
 import orthofinder_results.pipeline as pipeline_module
-from orthofinder_results import __version__
+from orthofinder_results import __schema_version__, __version__
 from orthofinder_results.cli import main
 from orthofinder_results.errors import InputValidationError, PublicationError
 from orthofinder_results.io_utils import (
@@ -139,7 +139,7 @@ def test_pipeline_publishes_queryable_offline_resource(
         ).fetchone()[0] > 0
         assert connection.execute(
             "SELECT schema_version FROM resource_metadata"
-        ).fetchone()[0] == 3
+        ).fetchone()[0] == __schema_version__
         assert connection.execute("SELECT count(*) FROM tree_payloads").fetchone()[0] == 1
     finally:
         connection.close()

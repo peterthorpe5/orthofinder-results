@@ -25,6 +25,78 @@ def query_service(application_resource: Path) -> OrthoFinderQueryService:
     return OrthoFinderQueryService(resource=open_resource(path=application_resource))
 
 
+@pytest.fixture
+def benchmark_query_service(application_resource: Path) -> OrthoFinderQueryService:
+    """Add compact benchmark relations and return a newly validated service."""
+
+    database = application_resource / "duckdb/orthofinder_results.duckdb"
+    connection = duckdb.connect(str(database))
+    try:
+        connection.execute(
+            "CREATE TABLE benchmark_group_profiles AS SELECT * FROM (VALUES "
+            "('test_run','HOG','N0','N0.HOG1','E3_ALL','E3','ALL','TARGET'),"
+            "('test_run','HOG','N0','N0.HOG2','MATCHED_NON_FOCUS',"
+            "'NON_FOCUS_CONTROL','MATCHED','MATCHED_CONTROL'),"
+            "('test_run','HOG','N0','N0.HOG3','HOUSEKEEPING_ALL',"
+            "'HOUSEKEEPING','ALL','TARGET')) AS t(run_id,group_type,hierarchy_node,"
+            "group_id,profile_id,profile_class,profile_subclass,membership_role)"
+        )
+        connection.execute(
+            "CREATE TABLE benchmark_cluster_results AS SELECT * FROM (VALUES "
+            "('test_run','HOG','N0','N0.HOG1','E3_ALL','E3','ALL','TARGET',"
+            "3,2,'EXACT',0.20,0.18,0.05,0.08,0.25),"
+            "('test_run','HOG','N0','N0.HOG2','MATCHED_NON_FOCUS',"
+            "'NON_FOCUS_CONTROL','MATCHED','MATCHED_CONTROL',2,2,'EXACT',"
+            "0.12,0.11,0.02,0.03,0.1667),"
+            "('test_run','HOG','N0','N0.HOG3','HOUSEKEEPING_ALL','HOUSEKEEPING',"
+            "'ALL','TARGET',3,3,'EXACT',0.10,0.09,0.01,0.02,0.10)) AS t("
+            "run_id,group_type,hierarchy_node,group_id,profile_ids,profile_classes,"
+            "profile_subclasses,membership_roles,member_count,species_count,"
+            "computation_status,mean_distance,median_distance,"
+            "population_stddev_distance,distance_interquartile_range,"
+            "distance_coefficient_of_variation)"
+        )
+        connection.execute(
+            "CREATE TABLE benchmark_individual_comparisons AS SELECT * FROM (VALUES "
+            "('test_run','HOG','N0','N0.HOG1','MATCHED_NON_FOCUS',"
+            "'RAW_MATCHED_CONTROL','mean_distance',0.20,3,0.12,0.08,0.90,"
+            "0.90,0.20,0.40,'INDIVIDUAL::MATCHED_NON_FOCUS::mean_distance',"
+            "0.40,false,'TESTED'),"
+            "('test_run','HOG','N0','N0.HOG1','HOUSEKEEPING_ALL',"
+            "'MATCHED_RESIDUAL','mean_distance',0.08,3,-0.02,0.10,0.95,"
+            "0.95,0.10,0.20,'INDIVIDUAL::HOUSEKEEPING_ALL::mean_distance',"
+            "0.20,false,'TESTED')) AS t(run_id,group_type,hierarchy_node,group_id,"
+            "background_profile_id,comparison_scale,metric,observed_value,"
+            "background_group_count,background_median,difference_from_background_median,"
+            "empirical_percentile,lower_tail_p_value,upper_tail_p_value,"
+            "two_sided_p_value,fdr_family,fdr_q_value,leave_one_out,status)"
+        )
+        connection.execute(
+            "CREATE TABLE benchmark_contrasts AS SELECT * FROM (VALUES "
+            "('test_run','E3_ALL__VS__HOUSEKEEPING_ALL','E3_ALL','HOUSEKEEPING_ALL',"
+            "'MATCHED_RESIDUAL','mean_distance',3,3,0.08,-0.02,0.10,0.05,0.15,"
+            "0.8,9.0,0.04,'PROFILE_CONTRAST::mean_distance',0.04,'TESTED',"
+            "'Positive means greater dispersion.')) AS t(run_id,contrast_id,"
+            "target_profile_id,reference_profile_id,comparison_scale,metric,"
+            "target_group_count,reference_group_count,target_median,reference_median,"
+            "median_difference,median_difference_ci_low,median_difference_ci_high,"
+            "cliffs_delta,mann_whitney_u,p_value_two_sided,fdr_family,fdr_q_value,"
+            "status,interpretation)"
+        )
+        connection.execute(
+            "CREATE TABLE benchmark_cluster_classifications AS SELECT * FROM (VALUES "
+            "('test_run','HOG','N0','N0.HOG1',3,0.20,0.12,0.9,'TYPICAL',"
+            "0.05,0.02,0.9,'TYPICAL','rule','CLASSIFIED')) AS t(run_id,group_type,"
+            "hierarchy_node,group_id,matched_control_count,mean_distance,"
+            "mean_distance_control_median,mean_distance_control_percentile,"
+            "central_divergence_class,distance_sd,distance_sd_control_median,"
+            "distance_sd_control_percentile,heterogeneity_class,classification_rule,status)"
+        )
+    finally:
+        connection.close()
+    return OrthoFinderQueryService(resource=open_resource(path=application_resource))
+
+
 def _group_ids(*, service: OrthoFinderQueryService, filters: GroupSearchFilters) -> list[str]:
     """Return group identifiers from one search page."""
 
@@ -52,6 +124,61 @@ def test_resource_selectors_and_overview_are_complete(
         "distance_group_count": 2,
         "portable_tree_count": 0,
     }
+
+
+def test_benchmark_queries_are_capability_driven_and_parameterised(
+    benchmark_query_service: OrthoFinderQueryService,
+) -> None:
+    """Profile, contrast and individual result queries retain cluster units."""
+
+    service = benchmark_query_service
+    profiles = service.benchmark_profiles()
+    assert {row["profile_id"] for row in profiles} == {
+        "E3_ALL",
+        "HOUSEKEEPING_ALL",
+        "MATCHED_NON_FOCUS",
+    }
+    assert all(row["group_count"] == 1 for row in profiles)
+    catalogue = service.benchmark_cluster_catalogue()
+    assert [row["group_id"] for row in catalogue] == ["N0.HOG1", "N0.HOG3"]
+    raw = service.benchmark_distribution(
+        profile_ids=("E3_ALL",),
+        metric="mean_distance",
+        comparison_scale="RAW",
+    )
+    assert float(raw[0]["metric_value"]) == pytest.approx(0.2)
+    residual = service.benchmark_distribution(
+        profile_ids=("E3_ALL",),
+        metric="mean_distance",
+        comparison_scale="MATCHED_RESIDUAL",
+    )
+    assert float(residual[0]["metric_value"]) == pytest.approx(0.08)
+    contrasts = service.benchmark_contrasts(metric="mean_distance")
+    assert float(contrasts[0]["fdr_q_value"]) == pytest.approx(0.04)
+    key = GroupKey("test_run", "HOG", "N0", "N0.HOG1")
+    individual = service.benchmark_individual_comparisons(
+        key=key,
+        metric="mean_distance",
+    )
+    assert len(individual) == 2
+    assert service.benchmark_classifications()[0]["status"] == "CLASSIFIED"
+    with pytest.raises(InputValidationError, match="Unsupported benchmark metric"):
+        service.benchmark_distribution(
+            profile_ids=("E3_ALL",),
+            metric="unsafe_sql",
+            comparison_scale="RAW",
+        )
+
+
+def test_older_resources_return_empty_benchmark_capabilities(
+    query_service: OrthoFinderQueryService,
+) -> None:
+    """Pre-benchmark resources remain usable and expose explicit empty results."""
+
+    assert query_service.benchmark_profiles() == ()
+    assert query_service.benchmark_cluster_catalogue() == ()
+    assert query_service.benchmark_contrasts() == ()
+    assert query_service.benchmark_classifications() == ()
 
 
 def test_all_distance_result_facets_and_selected_statistics(

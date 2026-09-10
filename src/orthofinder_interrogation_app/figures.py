@@ -616,6 +616,214 @@ def comparison_pcoa_figure(*, geometries: Mapping[str, PcoaGeometry]) -> go.Figu
     return figure
 
 
+def benchmark_distribution_figure(
+    *, rows: Sequence[Mapping[str, Any]], metric_label: str, scale_label: str
+) -> go.Figure:
+    """Build cluster-level box-and-point distributions for benchmark profiles.
+
+    Args:
+        rows: Profile-labelled cluster observations.
+        metric_label: Plain-language selected dispersion metric.
+        scale_label: Plain-language raw or matched-residual scale.
+
+    Returns:
+        Interactive profile distributions whose points are cluster replicates.
+    """
+
+    figure = go.Figure()
+    profiles = sorted({str(row["profile_id"]) for row in rows})
+    for index, profile_id in enumerate(profiles):
+        selected = [row for row in rows if str(row["profile_id"]) == profile_id]
+        figure.add_trace(
+            go.Box(
+                x=[profile_id] * len(selected),
+                y=[float(row["metric_value"]) for row in selected],
+                name=profile_id,
+                boxpoints="all",
+                jitter=0.35,
+                pointpos=0,
+                marker={"size": 6, "opacity": 0.68},
+                line={"color": _series_colour(index=index)},
+                fillcolor=_series_colour(index=index),
+                opacity=0.62,
+                customdata=[
+                    [row["group_type"], row["hierarchy_node"], row["group_id"]]
+                    for row in selected
+                ],
+                hovertemplate=(
+                    "Profile=%{x}<br>Value=%{y:.6g}<br>"
+                    "Group=%{customdata[0]} | %{customdata[1]} | "
+                    "%{customdata[2]}<extra></extra>"
+                ),
+            )
+        )
+    figure.update_layout(
+        title=f"Cluster-level {metric_label} by biological profile",
+        xaxis_title="Biological profile",
+        yaxis_title=f"{metric_label} ({scale_label})",
+        height=650,
+        template="plotly_white",
+        showlegend=False,
+    )
+    return figure
+
+
+def benchmark_contrast_figure(
+    *, rows: Sequence[Mapping[str, Any]], metric_label: str
+) -> go.Figure:
+    """Build a confidence-interval forest plot for tested profile contrasts.
+
+    Args:
+        rows: Precomputed contrast records for one metric.
+        metric_label: Plain-language selected metric.
+
+    Returns:
+        Median matched-residual differences with 95% bootstrap intervals.
+    """
+
+    tested = [
+        row
+        for row in rows
+        if row.get("status") == "TESTED"
+        and row.get("median_difference") is not None
+        and row.get("median_difference_ci_low") is not None
+        and row.get("median_difference_ci_high") is not None
+    ]
+    tested.sort(key=lambda row: float(row["median_difference"]))
+    labels = [
+        f"{row['target_profile_id']} vs {row['reference_profile_id']}"
+        for row in tested
+    ]
+    differences = [float(row["median_difference"]) for row in tested]
+    q_values = [
+        None if row.get("fdr_q_value") is None else float(row["fdr_q_value"])
+        for row in tested
+    ]
+    figure = go.Figure(
+        go.Scatter(
+            x=differences,
+            y=labels,
+            mode="markers",
+            marker={
+                "size": 10,
+                "color": [
+                    "#b91c1c" if value is not None and value <= 0.05 else "#355c8a"
+                    for value in q_values
+                ],
+            },
+            error_x={
+                "type": "data",
+                "symmetric": False,
+                "array": [
+                    float(row["median_difference_ci_high"]) - difference
+                    for row, difference in zip(tested, differences, strict=True)
+                ],
+                "arrayminus": [
+                    difference - float(row["median_difference_ci_low"])
+                    for row, difference in zip(tested, differences, strict=True)
+                ],
+                "visible": True,
+            },
+            customdata=[
+                [row["cliffs_delta"], row["p_value_two_sided"], row["fdr_q_value"]]
+                for row in tested
+            ],
+            hovertemplate=(
+                "Median difference=%{x:.6g}<br>Cliff's delta=%{customdata[0]:.4g}"
+                "<br>p=%{customdata[1]:.4g}<br>FDR q=%{customdata[2]:.4g}"
+                "<extra></extra>"
+            ),
+        )
+    )
+    figure.add_vline(x=0.0, line_dash="dash", line_color="#6b7280")
+    figure.update_layout(
+        title=f"Matched-background contrasts: {metric_label}",
+        xaxis_title=(
+            "Median target minus reference matched-control residual "
+            "(positive = greater dispersion)"
+        ),
+        yaxis_title="Planned contrast",
+        height=max(520, 170 + 38 * len(tested)),
+        template="plotly_white",
+    )
+    return figure
+
+
+def benchmark_individual_figure(
+    *, rows: Sequence[Mapping[str, Any]], metric_label: str, scale_label: str
+) -> go.Figure:
+    """Compare one cluster value with several empirical background medians.
+
+    Args:
+        rows: Individual comparison records sharing a metric and scale.
+        metric_label: Plain-language dispersion metric.
+        scale_label: Plain-language comparison scale.
+
+    Returns:
+        Horizontal observed-versus-background-median comparison plot.
+    """
+
+    tested = [
+        row
+        for row in rows
+        if row.get("status") == "TESTED" and row.get("background_median") is not None
+    ]
+    tested.sort(key=lambda row: str(row["background_profile_id"]))
+    backgrounds = [str(row["background_profile_id"]) for row in tested]
+    figure = go.Figure()
+    for position, row in enumerate(tested):
+        observed = float(row["observed_value"])
+        median = float(row["background_median"])
+        figure.add_shape(
+            type="line",
+            x0=min(observed, median),
+            x1=max(observed, median),
+            y0=position,
+            y1=position,
+            line={"color": "#9ca3af", "width": 2},
+        )
+    figure.add_trace(
+        go.Scatter(
+            x=[float(row["background_median"]) for row in tested],
+            y=backgrounds,
+            mode="markers",
+            name="Background median",
+            marker={"symbol": "diamond", "size": 11, "color": "#6b7280"},
+        )
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=[float(row["observed_value"]) for row in tested],
+            y=backgrounds,
+            mode="markers",
+            name="Selected cluster",
+            marker={"size": 12, "color": "#d95f0e"},
+            customdata=[
+                [
+                    row["empirical_percentile"],
+                    row["two_sided_p_value"],
+                    row["fdr_q_value"],
+                    row["background_group_count"],
+                ]
+                for row in tested
+            ],
+            hovertemplate=(
+                "Observed=%{x:.6g}<br>Percentile=%{customdata[0]:.3f}"
+                "<br>p=%{customdata[1]:.4g}<br>FDR q=%{customdata[2]:.4g}"
+                "<br>Background clusters=%{customdata[3]}<extra></extra>"
+            ),
+        )
+    )
+    figure.update_layout(
+        title=f"Selected cluster versus empirical backgrounds: {metric_label}",
+        xaxis_title=f"{metric_label} ({scale_label})",
+        yaxis_title="Comparison background",
+        height=max(480, 170 + 48 * len(tested)),
+        template="plotly_white",
+    )
+    return figure
+
+
 def _stable_species_colour(*, species: str) -> str:
     """Return a deterministic HSL colour derived from an exact species label."""
 

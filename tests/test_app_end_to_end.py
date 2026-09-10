@@ -113,6 +113,58 @@ def test_all_distance_results_route_exports_complete_selection(
     )
 
 
+def test_dispersion_benchmark_route_explains_older_resources(
+    application_resource: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The new page remains explicit and safe for resources without benchmarks."""
+
+    test = _application_test(
+        application_resource=application_resource,
+        monkeypatch=monkeypatch,
+    )
+    test.sidebar.radio[0].set_value("Dispersion benchmarks")
+    test.run()
+    assert not test.exception
+    assert any(
+        header.value == "Calibrated dispersion benchmarks" for header in test.header
+    )
+    assert any("predates matched-background" in item.value for item in test.info)
+
+
+def test_dispersion_benchmark_route_renders_complete_inference(
+    benchmark_application_resource: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A benchmark resource renders profiles, plots, tests and paired downloads."""
+
+    test = _application_test(
+        application_resource=benchmark_application_resource,
+        monkeypatch=monkeypatch,
+    )
+    test.sidebar.radio[0].set_value("Dispersion benchmarks")
+    test.run()
+    assert not test.exception
+    assert any(
+        header.value == "Calibrated dispersion benchmarks" for header in test.header
+    )
+    assert any(
+        subheader.value == "Compare biological backgrounds"
+        for subheader in test.subheader
+    )
+    assert any(
+        subheader.value == "Test one cluster against every background"
+        for subheader in test.subheader
+    )
+    assert len(test.dataframe) >= 4
+    assert len(test.get("plotly_chart")) >= 4
+    assert len(test.get("download_button")) >= 6
+    assert any(
+        "predetermined answers" in item.value
+        for item in test.markdown
+    )
+
+
 def test_focus_protein_clusters_use_custom_authority_and_open_visuals(
     application_resource: Path,
     monkeypatch: pytest.MonkeyPatch,

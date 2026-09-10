@@ -14,7 +14,7 @@ from orthofinder_results.errors import InputValidationError
 from .models import ResourceIdentity
 
 _LOGGER = logging.getLogger("orthofinder_interrogation_app.resource")
-SUPPORTED_SCHEMA_VERSIONS = frozenset({2, 3})
+SUPPORTED_SCHEMA_VERSIONS = frozenset({2, 3, 4})
 REQUIRED_RELATIONS = frozenset(
     {
         "distance_statistics",
@@ -72,7 +72,7 @@ def open_resource(*, path: Path) -> ResourceIdentity:
         )
     if schema_version >= 3 and "tree_payloads" not in relations:
         raise InputValidationError(
-            "Schema-3 resource DuckDB lacks required relation: tree_payloads"
+            "Schema-3-or-newer resource DuckDB lacks required relation: tree_payloads"
         )
     if len(run_ids) != 1:
         raise InputValidationError(

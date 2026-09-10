@@ -94,7 +94,7 @@ def test_missing_manifest_fails(application_resource: Path) -> None:
         ({"run_id": "other"}, "", "identifiers disagree"),
         ({"schema_version": 3}, "", "schema versions disagree"),
         ({"schema_version": "invalid"}, "", "not an integer"),
-        ({}, "UPDATE resource_metadata SET schema_version = 4", "Unsupported resource schema"),
+        ({}, "UPDATE resource_metadata SET schema_version = 5", "Unsupported resource schema"),
         ({}, "DELETE FROM group_statistics", "exactly one run_id"),
         (
             {},

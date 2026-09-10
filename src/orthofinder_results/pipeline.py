@@ -25,6 +25,13 @@ from orthofinder_interrogation_app.focus import (
 )
 
 from . import __schema_version__, __version__
+from .benchmark_analysis import (
+    BenchmarkPlan,
+    build_benchmark_plan,
+    publish_benchmark_inputs,
+    publish_benchmark_results,
+)
+from .benchmark_authority import BenchmarkAuthority, read_benchmark_authority
 from .distances import (
     DISTANCE_FIELDS,
     DISTANCE_STATISTIC_FIELDS,
@@ -183,6 +190,96 @@ GROUP_TYPES = {
         "distance_range": "float64",
         "distance_coefficient_of_variation": "float64",
     },
+    "benchmark_marker_audit": {
+        "enabled": "bool",
+        "matched_group_count": "int64",
+        "matched_member_count": "int64",
+    },
+    "benchmark_group_profiles": {
+        "marker_count": "int64",
+        "matched_member_count": "int64",
+    },
+    "benchmark_matched_controls": {
+        "control_rank": "int64",
+        "matching_score": "float64",
+        "anchor_member_count": "int64",
+        "control_member_count": "int64",
+        "anchor_species_count": "int64",
+        "control_species_count": "int64",
+        "anchor_mean_copies_per_species": "float64",
+        "control_mean_copies_per_species": "float64",
+        "anchor_single_copy_fraction": "float64",
+        "control_single_copy_fraction": "float64",
+        "control_reused": "bool",
+    },
+    "benchmark_cluster_results": {
+        "member_count": "int64",
+        "species_count": "int64",
+        "single_copy_species_count": "int64",
+        "max_copies_per_species": "int64",
+        "mean_copies_per_species": "float64",
+        "total_member_count": "int64",
+        "sampled_member_count": "int64",
+        "distance_pair_count": "int64",
+        "unresolved_pair_count": "int64",
+        "minimum_distance": "float64",
+        "q05_distance": "float64",
+        "q25_distance": "float64",
+        "median_distance": "float64",
+        "mean_distance": "float64",
+        "q75_distance": "float64",
+        "q95_distance": "float64",
+        "maximum_distance": "float64",
+        "population_stddev_distance": "float64",
+        "distance_interquartile_range": "float64",
+        "distance_coefficient_of_variation": "float64",
+        "sampling_fraction": "float64",
+        "pairwise_rows_persisted": "bool",
+    },
+    "benchmark_background_statistics": {
+        "eligible_group_count": "int64",
+        "minimum_value": "float64",
+        "q25_value": "float64",
+        "median_value": "float64",
+        "mean_value": "float64",
+        "q75_value": "float64",
+        "maximum_value": "float64",
+        "population_stddev_value": "float64",
+    },
+    "benchmark_contrasts": {
+        "target_group_count": "int64",
+        "reference_group_count": "int64",
+        "target_median": "float64",
+        "reference_median": "float64",
+        "median_difference": "float64",
+        "median_difference_ci_low": "float64",
+        "median_difference_ci_high": "float64",
+        "cliffs_delta": "float64",
+        "mann_whitney_u": "float64",
+        "p_value_two_sided": "float64",
+        "fdr_q_value": "float64",
+    },
+    "benchmark_individual_comparisons": {
+        "observed_value": "float64",
+        "background_group_count": "int64",
+        "background_median": "float64",
+        "difference_from_background_median": "float64",
+        "empirical_percentile": "float64",
+        "lower_tail_p_value": "float64",
+        "upper_tail_p_value": "float64",
+        "two_sided_p_value": "float64",
+        "fdr_q_value": "float64",
+        "leave_one_out": "bool",
+    },
+    "benchmark_cluster_classifications": {
+        "matched_control_count": "int64",
+        "mean_distance": "float64",
+        "mean_distance_control_median": "float64",
+        "mean_distance_control_percentile": "float64",
+        "distance_sd": "float64",
+        "distance_sd_control_median": "float64",
+        "distance_sd_control_percentile": "float64",
+    },
 }
 
 
@@ -266,6 +363,9 @@ def run_pipeline(
     focus_proteins_path: Path | None = None,
     focus_group_type: str = "HOG",
     focus_hierarchy_node: str = "N0",
+    benchmark_proteins_path: Path | None = None,
+    benchmark_controls_per_group: int = 3,
+    benchmark_bootstrap_resamples: int = 1_000,
 ) -> dict[str, Any]:
     """Build a complete versioned result resource without mutating its authority.
 
@@ -293,6 +393,9 @@ def run_pipeline(
         focus_proteins_path: Optional E3/focus authority restricting groups and distances.
         focus_group_type: Exact group collection used for focus selection.
         focus_hierarchy_node: Exact HOG hierarchy node used for focus selection.
+        benchmark_proteins_path: Optional housekeeping/R marker authority.
+        benchmark_controls_per_group: Unique distance-blind controls per target.
+        benchmark_bootstrap_resamples: Contrast confidence-interval iterations.
 
     Returns:
         Completed run manifest.
@@ -318,6 +421,9 @@ def run_pipeline(
         focus_enabled=focus_proteins_path is not None,
         focus_group_type=focus_group_type,
         focus_hierarchy_node=focus_hierarchy_node,
+        benchmark_enabled=benchmark_proteins_path is not None,
+        benchmark_controls_per_group=benchmark_controls_per_group,
+        benchmark_bootstrap_resamples=benchmark_bootstrap_resamples,
     )
     focus_path = (
         Path(focus_proteins_path).expanduser().resolve()
@@ -326,6 +432,16 @@ def run_pipeline(
     )
     focus_authority = (
         read_focus_proteins(path=focus_path) if focus_path is not None else None
+    )
+    benchmark_path = (
+        Path(benchmark_proteins_path).expanduser().resolve()
+        if benchmark_proteins_path is not None
+        else None
+    )
+    benchmark_authority = (
+        read_benchmark_authority(path=benchmark_path)
+        if benchmark_path is not None
+        else None
     )
     layout = discover_layout(results_dir=results_dir)
     output = validate_persistent_path(path=output_dir, role="output_dir")
@@ -352,6 +468,7 @@ def run_pipeline(
         layout=layout,
         alignment_dir=resolved_alignment_dir,
         focus_proteins_path=focus_path,
+        benchmark_proteins_path=benchmark_path,
     )
     _LOGGER.info(
         "Source inventory finished: files=%s, elapsed_seconds=%.3f",
@@ -403,6 +520,10 @@ def run_pipeline(
             focus_proteins_path=focus_path,
             focus_group_type=focus_group_type,
             focus_hierarchy_node=focus_hierarchy_node,
+            benchmark_authority=benchmark_authority,
+            benchmark_proteins_path=benchmark_path,
+            benchmark_controls_per_group=benchmark_controls_per_group,
+            benchmark_bootstrap_resamples=benchmark_bootstrap_resamples,
         )
         # Close the staging file handler before checksums are verified or files
         # cross filesystems. Subsequent CLI messages remain console-only.
@@ -859,6 +980,10 @@ def _build_resource(
     focus_proteins_path: Path | None,
     focus_group_type: str,
     focus_hierarchy_node: str,
+    benchmark_authority: BenchmarkAuthority | None,
+    benchmark_proteins_path: Path | None,
+    benchmark_controls_per_group: int,
+    benchmark_bootstrap_resamples: int,
 ) -> dict[str, Any]:
     """Populate one staging directory and return its complete manifest.
 
@@ -886,6 +1011,10 @@ def _build_resource(
         focus_proteins_path: Physical focus input copied into provenance.
         focus_group_type: Exact focus group collection.
         focus_hierarchy_node: Exact focus HOG hierarchy node.
+        benchmark_authority: Optional reviewed housekeeping/R marker authority.
+        benchmark_proteins_path: Physical benchmark authority copied to provenance.
+        benchmark_controls_per_group: Unique non-focus controls per target.
+        benchmark_bootstrap_resamples: Deterministic contrast bootstrap iterations.
 
     Returns:
         Complete resource manifest.
@@ -911,6 +1040,11 @@ def _build_resource(
             shutil.copy2(
                 focus_proteins_path,
                 provenance / f"focus_protein_authority{suffix}",
+            )
+        if benchmark_proteins_path is not None:
+            shutil.copy2(
+                benchmark_proteins_path,
+                provenance / "dispersion_benchmark_authority.tsv",
             )
         stage["details"] = f"input_files={len(source_inventory)}"
 
@@ -961,6 +1095,39 @@ def _build_resource(
                 f"groups={len(focus_selection.group_statistics)};"
                 f"matches={len(focus_selection.match_rows)}"
             )
+    benchmark_plan: BenchmarkPlan | None = None
+    if benchmark_authority is not None:
+        if focus_selection is None:
+            raise InputValidationError(
+                "Dispersion benchmarking requires an E3/focus authority."
+            )
+        with stages.record(stage="dispersion_benchmark_selection") as stage:
+            marker_selection = select_focus_groups(
+                tables_dir=tables,
+                run_id=run_id,
+                authority=benchmark_authority.to_focus_authority(),
+                group_type=focus_group_type,
+                hierarchy_node=focus_hierarchy_node,
+            )
+            if not marker_selection.group_statistics:
+                raise InputValidationError(
+                    "No enabled dispersion benchmark marker matched the group collection."
+                )
+            benchmark_plan = build_benchmark_plan(
+                tables_dir=tables,
+                run_id=run_id,
+                e3_selection=focus_selection,
+                marker_selection=marker_selection,
+                marker_authority=benchmark_authority,
+                controls_per_group=benchmark_controls_per_group,
+            )
+            publish_benchmark_inputs(tables_dir=tables, plan=benchmark_plan)
+            stage["details"] = (
+                f"marker_records={len(benchmark_authority.records)};"
+                f"matched_markers={marker_selection.matched_seed_count};"
+                f"target_groups={len(benchmark_plan.target_group_keys)};"
+                f"matched_controls={len(benchmark_plan.control_group_keys)}"
+            )
     with stages.record(stage="tree_inventory_and_normalisation") as stage:
         (
             tree_inventory,
@@ -973,7 +1140,9 @@ def _build_resource(
             run_id=run_id,
             parse_gene_trees=parse_gene_trees,
             selected_gene_tree_ids=(
-                focus_selection.selected_tree_ids
+                benchmark_plan.selected_tree_ids
+                if benchmark_plan is not None
+                else focus_selection.selected_tree_ids
                 if focus_selection is not None
                 else None
             ),
@@ -994,11 +1163,22 @@ def _build_resource(
             distance_max_groups=distance_max_groups,
             distance_max_members=distance_max_members,
             selected_group_keys=(
-                focus_selection.group_keys if focus_selection is not None else None
+                benchmark_plan.selected_group_keys
+                if benchmark_plan is not None
+                else focus_selection.group_keys
+                if focus_selection is not None
+                else None
             ),
             required_members_by_group=(
-                focus_selection.required_members_by_group
+                benchmark_plan.required_members_by_group
+                if benchmark_plan is not None
+                else focus_selection.required_members_by_group
                 if focus_selection is not None
+                else None
+            ),
+            persist_pairwise_group_keys=(
+                benchmark_plan.target_group_keys
+                if benchmark_plan is not None
                 else None
             ),
         )
@@ -1020,6 +1200,18 @@ def _build_resource(
             stage["details"] = (
                 f"groups={len(focus_result_rows)};"
                 f"unavailable_distance_groups={unavailable}"
+            )
+    benchmark_counts: dict[str, int] = {}
+    if benchmark_plan is not None:
+        with stages.record(stage="dispersion_benchmark_statistics") as stage:
+            benchmark_counts = publish_benchmark_results(
+                tables_dir=tables,
+                plan=benchmark_plan,
+                distance_summaries=distance_summaries,
+                bootstrap_resamples=benchmark_bootstrap_resamples,
+            )
+            stage["details"] = ";".join(
+                f"{key}={value}" for key, value in sorted(benchmark_counts.items())
             )
 
     with stages.record(stage="parquet_publication") as stage:
@@ -1089,6 +1281,7 @@ def _build_resource(
                 else 0
             ),
             "focus_group_count": len(focus_result_rows),
+            **benchmark_counts,
         },
     }
     if focus_selection is not None:
@@ -1101,6 +1294,30 @@ def _build_resource(
             "seed_matches": "tables/e3_seed_matches.tsv.gz",
             "seed_audit": "tables/e3_seed_catalogue_audit.tsv.gz",
             "pairwise_distances": "tables/pairwise_distances.tsv.gz",
+        }
+    if benchmark_plan is not None:
+        run_metadata["dispersion_benchmark"] = {
+            "marker_authority_name": benchmark_plan.marker_authority.source_name,
+            "marker_authority_sha256": benchmark_plan.marker_authority.sha256,
+            "controls_per_target": benchmark_controls_per_group,
+            "bootstrap_resamples": benchmark_bootstrap_resamples,
+            "statistical_unit": "ORTHOFINDER_CLUSTER",
+            "matching_variables": (
+                "member_count;species_count;mean_copies_per_species;"
+                "single_copy_species_fraction"
+            ),
+            "cluster_results": "tables/benchmark_cluster_results.tsv.gz",
+            "background_statistics": (
+                "tables/benchmark_background_statistics.tsv.gz"
+            ),
+            "profile_contrasts": "tables/benchmark_contrasts.tsv.gz",
+            "individual_comparisons": (
+                "tables/benchmark_individual_comparisons.tsv.gz"
+            ),
+            "classifications": (
+                "tables/benchmark_cluster_classifications.tsv.gz"
+            ),
+            "matched_controls": "tables/benchmark_matched_controls.tsv.gz",
         }
     report_path = report_dir / "orthofinder_results_summary.html"
     with stages.record(stage="offline_html_report") as stage:
@@ -1144,6 +1361,8 @@ def _build_resource(
         focus_selection=focus_selection,
         focus_result_rows=focus_result_rows,
         distance_summaries=distance_summaries,
+        benchmark_plan=benchmark_plan,
+        benchmark_counts=benchmark_counts,
     )
     with stages.record(stage="quality_control") as stage:
         write_tsv(
@@ -1191,6 +1410,7 @@ def _build_resource(
                 else 0
             ),
             "focus_group_count": len(focus_result_rows),
+            **benchmark_counts,
         },
         "report_limits": {
             "maximum_statistic_rows": report_max_statistic_rows,
@@ -1209,6 +1429,18 @@ def _build_resource(
             (
                 "OrthoFinder group identifiers are scoped to this run and must not be "
                 "joined across runs by label alone."
+            ),
+            (
+                "Housekeeping and R/NLR panels are empirical benchmark candidates, "
+                "not assumed compact or dispersed truths."
+            ),
+            (
+                "Dispersion tests use clusters as independent units and matched-control "
+                "residuals; individual protein-pair rows are not statistical replicates."
+            ),
+            (
+                "Matched non-focus controls reduce measured structural confounding but "
+                "cannot remove unmeasured biological or annotation confounding."
             ),
         ],
     }
@@ -1544,6 +1776,7 @@ def _publish_distances(
     distance_max_members: int,
     selected_group_keys: frozenset[str] | None = None,
     required_members_by_group: Mapping[str, tuple[str, ...]] | None = None,
+    persist_pairwise_group_keys: frozenset[str] | None = None,
 ) -> tuple[int, list[dict[str, Any]]]:
     """Publish optional aligned-sequence or resolved-tree distances.
 
@@ -1559,6 +1792,8 @@ def _publish_distances(
         distance_max_members: Per-group member bound.
         selected_group_keys: Optional exact focus-selected group keys.
         required_members_by_group: Focus members that bounded samples must retain.
+        persist_pairwise_group_keys: Optional subset whose individual pairs are
+            published. Every selected group still receives a distance summary.
 
     Returns:
         Pairwise row count and one summary per attempted group.
@@ -1611,6 +1846,7 @@ def _publish_distances(
                 maximum_members=distance_max_members,
                 selected_group_keys=selected_group_keys,
                 required_members_by_group=required_members_by_group,
+                persist_pairwise_group_keys=persist_pairwise_group_keys,
             )
         elif resolved_source == "RESOLVED_GENE_TREE":
             pair_count = _write_tree_distances(
@@ -1625,6 +1861,7 @@ def _publish_distances(
                 maximum_members=distance_max_members,
                 selected_group_keys=selected_group_keys,
                 required_members_by_group=required_members_by_group,
+                persist_pairwise_group_keys=persist_pairwise_group_keys,
             )
     write_tsv(
         path=_table_path(tables_dir=tables_dir, relation="distance_statistics"),
@@ -1646,6 +1883,7 @@ def _write_alignment_distances(
     maximum_members: int,
     selected_group_keys: frozenset[str] | None = None,
     required_members_by_group: Mapping[str, tuple[str, ...]] | None = None,
+    persist_pairwise_group_keys: frozenset[str] | None = None,
 ) -> int:
     """Write selected aligned-sequence distances and return their pair count.
 
@@ -1660,6 +1898,8 @@ def _write_alignment_distances(
         maximum_members: Per-group member calculation bound.
         selected_group_keys: Optional exact focus-selected groups.
         required_members_by_group: Focus members retained in bounded samples.
+        persist_pairwise_group_keys: Optional selected groups whose pair rows
+            are retained; summaries are retained for every calculated group.
 
     Returns:
         Published pairwise-distance row count.
@@ -1714,12 +1954,17 @@ def _write_alignment_distances(
             required_member_ids=(required_members_by_group or {}).get(key, ()),
             source_file=str(path),
         )
-        writer.writerows(rows)
+        persisted = persist_pairwise_group_keys is None or key in (
+            persist_pairwise_group_keys
+        )
+        if persisted:
+            writer.writerows(rows)
         summaries.append(summary)
-        pair_count += len(rows)
+        pair_count += len(rows) if persisted else 0
         _LOGGER.info(
             "Distance group finished: %s/%s, group=%s, status=%s, total_members=%s, "
-            "sampled_members=%s, pairs=%s, elapsed_seconds=%.3f",
+            "sampled_members=%s, calculated_pairs=%s, persisted=%s, "
+            "elapsed_seconds=%.3f",
             index,
             len(paths),
             group_id,
@@ -1727,6 +1972,7 @@ def _write_alignment_distances(
             summary["total_member_count"],
             summary["sampled_member_count"],
             f"{len(rows):,}",
+            persisted,
             time.perf_counter() - group_started,
         )
     return pair_count
@@ -1745,6 +1991,7 @@ def _write_tree_distances(
     maximum_members: int,
     selected_group_keys: frozenset[str] | None = None,
     required_members_by_group: Mapping[str, tuple[str, ...]] | None = None,
+    persist_pairwise_group_keys: frozenset[str] | None = None,
 ) -> int:
     """Write selected HOG/orthogroup patristic distances and summaries.
 
@@ -1760,6 +2007,8 @@ def _write_tree_distances(
         maximum_members: Per-group member calculation bound.
         selected_group_keys: Optional exact focus-selected groups.
         required_members_by_group: Focus members retained in bounded samples.
+        persist_pairwise_group_keys: Optional selected groups whose pair rows
+            are retained; summaries are retained for every calculated group.
 
     Returns:
         Published pairwise-distance row count.
@@ -1968,13 +2217,17 @@ def _write_tree_distances(
                 time.perf_counter() - group_started,
             )
             continue
-        writer.writerows(rows)
+        persisted = persist_pairwise_group_keys is None or key in (
+            persist_pairwise_group_keys
+        )
+        if persisted:
+            writer.writerows(rows)
         summaries.append(summary)
-        pair_count += len(rows)
+        pair_count += len(rows) if persisted else 0
         _LOGGER.info(
             "Distance group finished: %s/%s, group=%s, status=%s, "
-            "identifier_resolution=%s, sampled_members=%s, pairs=%s, "
-            "elapsed_seconds=%.3f",
+            "identifier_resolution=%s, sampled_members=%s, calculated_pairs=%s, "
+            "persisted=%s, elapsed_seconds=%.3f",
             index,
             len(statistics),
             group_id,
@@ -1982,6 +2235,7 @@ def _write_tree_distances(
             summary["member_identifier_resolution"],
             summary["sampled_member_count"],
             f"{len(rows):,}",
+            persisted,
             time.perf_counter() - group_started,
         )
     return pair_count
@@ -2611,6 +2865,7 @@ def _build_source_inventory(
     layout: ResultLayout,
     alignment_dir: Path | None,
     focus_proteins_path: Path | None = None,
+    benchmark_proteins_path: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Checksum every source that can alter the requested analytical result.
 
@@ -2618,6 +2873,7 @@ def _build_source_inventory(
         layout: Validated completed OrthoFinder layout.
         alignment_dir: Optional alignment authority.
         focus_proteins_path: Optional E3/focus selection authority.
+        benchmark_proteins_path: Optional housekeeping/R marker authority.
 
     Returns:
         Complete input file inventory in deterministic role/path order.
@@ -2647,6 +2903,8 @@ def _build_source_inventory(
         roles.extend(("alignment", path) for path in _alignment_paths(directory=alignment_dir))
     if focus_proteins_path is not None:
         roles.append(("focus_protein_authority", focus_proteins_path))
+    if benchmark_proteins_path is not None:
+        roles.append(("dispersion_benchmark_authority", benchmark_proteins_path))
     records = []
     for role, path in roles:
         record = file_record(path=path)
@@ -2804,6 +3062,8 @@ def _qc_rows(
     focus_selection: FocusSelection | None = None,
     focus_result_rows: Sequence[Mapping[str, Any]] = (),
     distance_summaries: Sequence[Mapping[str, Any]] = (),
+    benchmark_plan: BenchmarkPlan | None = None,
+    benchmark_counts: Mapping[str, int] | None = None,
 ) -> list[dict[str, Any]]:
     """Build explicit run validation checks.
 
@@ -2821,6 +3081,8 @@ def _qc_rows(
         focus_selection: Optional complete E3/focus selection.
         focus_result_rows: Flat selected-cluster result rows.
         distance_summaries: Explicit selected distance summaries.
+        benchmark_plan: Optional complete matched-background selection.
+        benchmark_counts: Published benchmark relation row counts.
 
     Returns:
         Required validation rows, including focus reconciliation when enabled.
@@ -2939,6 +3201,62 @@ def _qc_rows(
                 ),
             )
         )
+    if benchmark_plan is not None:
+        summary_keys = {_group_key(row) for row in distance_summaries}
+        expected_groups = len(benchmark_plan.selected_group_keys)
+        target_groups = len(benchmark_plan.target_group_keys)
+        controls = len(benchmark_plan.control_group_keys)
+        counts = dict(benchmark_counts or {})
+        linked_anchors = {
+            _group_key(
+                {
+                    "group_type": row["anchor_group_type"],
+                    "hierarchy_node": row["anchor_hierarchy_node"],
+                    "group_id": row["anchor_group_id"],
+                }
+            )
+            for row in benchmark_plan.control_links
+        }
+        rows.extend(
+            (
+                _qc(
+                    "benchmark_marker_audit_complete",
+                    len(benchmark_plan.marker_selection.audit_rows)
+                    == len(benchmark_plan.marker_authority.records),
+                    len(benchmark_plan.marker_selection.audit_rows),
+                    len(benchmark_plan.marker_authority.records),
+                    "Every marker has a matched, unmatched or disabled audit state.",
+                ),
+                _qc(
+                    "benchmark_matched_controls_complete",
+                    benchmark_plan.target_group_keys.issubset(linked_anchors),
+                    len(benchmark_plan.target_group_keys.intersection(linked_anchors)),
+                    target_groups,
+                    "Every target has one or more distance-blind matched controls.",
+                ),
+                _qc(
+                    "benchmark_distance_summaries_complete",
+                    benchmark_plan.selected_group_keys.issubset(summary_keys),
+                    len(benchmark_plan.selected_group_keys.intersection(summary_keys)),
+                    expected_groups,
+                    "Every target and matched control has a result or explicit reason.",
+                ),
+                _qc(
+                    "benchmark_cluster_export_complete",
+                    counts.get("benchmark_cluster_count", -1) == expected_groups,
+                    counts.get("benchmark_cluster_count", -1),
+                    expected_groups,
+                    "The cluster export contains every target and matched control.",
+                ),
+                _qc(
+                    "benchmark_target_and_control_groups_present",
+                    target_groups > 0 and controls > 0,
+                    f"targets={target_groups};controls={controls}",
+                    "targets>0;controls>0",
+                    "Benchmarking requires biological targets and non-focus controls.",
+                ),
+            )
+        )
     return rows
 
 
@@ -2971,6 +3289,9 @@ def _validate_controls(
     focus_group_type: str = "HOG",
     focus_hierarchy_node: str = "N0",
     distance_hierarchy_node: str = "N0",
+    benchmark_enabled: bool = False,
+    benchmark_controls_per_group: int = 3,
+    benchmark_bootstrap_resamples: int = 1_000,
 ) -> None:
     """Validate named execution controls before filesystem mutation.
 
@@ -2990,6 +3311,9 @@ def _validate_controls(
         focus_group_type: Exact focus group collection.
         focus_hierarchy_node: Exact focus hierarchy node.
         distance_hierarchy_node: Exact distance hierarchy node.
+        benchmark_enabled: Whether matched-background benchmarking is enabled.
+        benchmark_controls_per_group: Unique controls selected per target.
+        benchmark_bootstrap_resamples: Deterministic confidence-interval iterations.
 
     Raises:
         InputValidationError: If any controls are unsafe or inconsistent.
@@ -3032,6 +3356,23 @@ def _validate_controls(
         if distance_hierarchy_node != focus_hierarchy_node:
             raise InputValidationError(
                 "Focus and distance hierarchy nodes must be identical."
+            )
+    if benchmark_enabled:
+        if not focus_enabled:
+            raise InputValidationError(
+                "Dispersion benchmarking requires an E3/focus authority."
+            )
+        if focus_group_type != "HOG" or focus_hierarchy_node != "N0":
+            raise InputValidationError(
+                "Dispersion benchmarking currently requires HOGs at hierarchy N0."
+            )
+        if not 1 <= benchmark_controls_per_group <= 50:
+            raise InputValidationError(
+                "benchmark_controls_per_group must be between 1 and 50."
+            )
+        if not 100 <= benchmark_bootstrap_resamples <= 100_000:
+            raise InputValidationError(
+                "benchmark_bootstrap_resamples must be between 100 and 100,000."
             )
     _validate_report_controls(
         report_max_statistic_rows=report_max_statistic_rows,

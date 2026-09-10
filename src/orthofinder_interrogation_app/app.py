@@ -10,6 +10,7 @@ from typing import Any, Mapping
 import streamlit as st
 
 from orthofinder_interrogation_app.all_results_page import render_all_distance_results
+from orthofinder_interrogation_app.benchmark_page import render_dispersion_benchmarks
 from orthofinder_interrogation_app.comparison_page import render_cluster_comparison
 from orthofinder_interrogation_app.coverage_page import render_selection_coverage_tree
 from orthofinder_interrogation_app.distance_data import default_cache_directory
@@ -49,6 +50,7 @@ _PAGES = (
     "Find groups",
     "Cluster explorer",
     "Compare clusters",
+    "Dispersion benchmarks",
     "All distance results",
     "Taxonomic search",
     "Selection coverage tree",
@@ -62,6 +64,7 @@ _PAGE_LABELS = {
     "Find groups": "Find groups",
     "Cluster explorer": "Explore one cluster",
     "Compare clusters": "Compare clusters",
+    "Dispersion benchmarks": "Calibrated dispersion",
     "All distance results": "All distance results",
     "Taxonomic search": "Taxonomic search",
     "Selection coverage tree": "Selection coverage tree",
@@ -240,6 +243,8 @@ def main() -> None:
                 service=service,
                 cache_dir=cache_dir,
             )
+        elif page_name == "Dispersion benchmarks":
+            render_dispersion_benchmarks(service=service)
         elif page_name == "All distance results":
             render_all_distance_results(service=service)
         elif page_name == "Taxonomic search":
@@ -480,6 +485,22 @@ def _render_overview(*, service: OrthoFinderQueryService) -> None:
         on_click=_navigate_to,
         kwargs={"page": "Selection coverage tree"},
     )
+    coverage_action[1].markdown("#### Are E3 clusters unusually dispersed?")
+    coverage_action[1].write(
+        "Test E3s and individual E3 subtypes against housekeeping, R/NLR and "
+        "structure-matched non-focus cluster backgrounds."
+    )
+    coverage_action[1].button(
+        "Open calibrated dispersion",
+        key="summary_dispersion_benchmarks",
+        on_click=_navigate_to,
+        kwargs={"page": "Dispersion benchmarks"},
+        disabled=not service.has_relation(relation="benchmark_contrasts"),
+        help=(
+            "Available after the dispersion-benchmark cluster workflow has built "
+            "the required background relations."
+        ),
+    )
 
     with st.expander("Detailed group collections and hierarchy levels", expanded=False):
         st.write(
@@ -504,7 +525,8 @@ def _render_overview(*, service: OrthoFinderQueryService) -> None:
             **Available here:** generic OrthoFinder group discovery, a replaceable protein-focus
             authority (the packaged E3 seed list is the default), species and copy-number
             profiles, reviewed taxonomy selection/coverage trees, bounded tree distances,
-            compactness and dispersion views, gene-tree inspection, and comparison within one run.
+            compactness and dispersion views, gene-tree inspection, matched-background
+            cluster statistics, and comparison within one run.
 
             **Planned generic extensions:** explicit nested-HOG and split/merge interrogation,
             followed by comparisons between independently versioned OrthoFinder runs.

@@ -34,11 +34,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--action",
         required=True,
-        choices=("inspect", "run", "e3-precursor", "report", "coverage-tree"),
+        choices=(
+            "inspect",
+            "run",
+            "e3-precursor",
+            "dispersion-benchmark",
+            "report",
+            "coverage-tree",
+        ),
         help=(
             "Read-only inspection, complete resource publication, report-only "
-            "regeneration, E3-focus precursor publication, or selection-coverage "
-            "export from a completed resource."
+            "regeneration, E3-focus precursor publication, matched-background "
+            "dispersion benchmarking, or selection-coverage export."
         ),
     )
     parser.add_argument("--results-dir", type=Path)
@@ -141,6 +148,26 @@ def build_parser() -> argparse.ArgumentParser:
         "--focus-proteins",
         type=Path,
         help="Optional protein focus TSV; packaged E3 seeds are the default.",
+    )
+    parser.add_argument(
+        "--benchmark-proteins",
+        type=Path,
+        help=(
+            "Optional reviewed housekeeping/R marker TSV; the packaged "
+            "Arabidopsis authority is the dispersion-benchmark default."
+        ),
+    )
+    parser.add_argument(
+        "--benchmark-controls-per-group",
+        type=int,
+        default=3,
+        help="Unique distance-blind non-focus controls per benchmark target.",
+    )
+    parser.add_argument(
+        "--benchmark-bootstrap-resamples",
+        type=int,
+        default=1_000,
+        help="Deterministic bootstrap iterations for median-difference intervals.",
     )
     parser.add_argument("--require-exact-tax-id", action="append", default=[])
     parser.add_argument("--include-clade-tax-id", action="append", default=[])
@@ -267,6 +294,49 @@ def main(argv: Sequence[str] | None = None) -> int:
                 manifest["status"],
             )
             return 0
+        if args.action == "dispersion-benchmark":
+            _validate_dispersion_benchmark_arguments(parser=parser, args=args)
+            from orthofinder_interrogation_app.focus import bundled_focus_path
+
+            from .benchmark_authority import bundled_benchmark_path
+
+            focus_path = args.focus_proteins or bundled_focus_path()
+            benchmark_path = args.benchmark_proteins or bundled_benchmark_path()
+            manifest = run_pipeline(
+                results_dir=args.results_dir,
+                output_dir=args.output_dir,
+                run_id=args.run_id,
+                work_dir=args.work_dir,
+                alignment_dir=None,
+                distance_source="RESOLVED_GENE_TREE",
+                distance_group_type="HOG",
+                distance_hierarchy_node="N0",
+                distance_max_groups=0,
+                distance_max_members=args.distance_max_members,
+                parse_gene_trees=True,
+                report_max_statistic_rows=args.report_max_statistic_rows,
+                report_max_groups=args.report_max_groups,
+                report_max_members=args.report_max_members,
+                report_nearest_neighbours=args.report_nearest_neighbours,
+                resume=args.resume,
+                force=args.force,
+                keep_failed_work=args.keep_failed_work,
+                verbose=args.verbose,
+                focus_proteins_path=focus_path,
+                focus_group_type="HOG",
+                focus_hierarchy_node="N0",
+                benchmark_proteins_path=benchmark_path,
+                benchmark_controls_per_group=args.benchmark_controls_per_group,
+                benchmark_bootstrap_resamples=(
+                    args.benchmark_bootstrap_resamples
+                ),
+            )
+            _LOGGER.info(
+                "Completed dispersion benchmark run %s with status %s",
+                manifest["run_id"],
+                manifest["status"],
+            )
+            return 0
         _validate_run_arguments(parser=parser, args=args)
         manifest = run_pipeline(
             results_dir=args.results_dir,
@@ -342,7 +412,12 @@ def _validate_run_arguments(*, parser: argparse.ArgumentParser, args: argparse.N
         parser.error("Report-only arguments are not valid for --action run.")
     if args.focus_proteins is not None:
         parser.error(
-            "--focus-proteins requires --action e3-precursor or --action coverage-tree."
+            "--focus-proteins requires --action e3-precursor, "
+            "--action dispersion-benchmark or --action coverage-tree."
+        )
+    if args.benchmark_proteins is not None:
+        parser.error(
+            "--benchmark-proteins requires --action dispersion-benchmark."
         )
 
 
@@ -395,6 +470,67 @@ def _validate_e3_precursor_arguments(
         parser.error(
             "--action e3-precursor requires --distance-max-groups 0 so matching "
             "clusters are never truncated."
+        )
+    if args.benchmark_proteins is not None:
+        parser.error(
+            "--benchmark-proteins requires --action dispersion-benchmark."
+        )
+
+
+def _validate_dispersion_benchmark_arguments(
+    *, parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    """Validate the fixed HOG-N0 matched-background benchmark contract.
+
+    Args:
+        parser: Parser used for controlled named-option errors.
+        args: Parsed command-line arguments.
+    """
+
+    missing = [
+        name
+        for name, value in (
+            ("--results-dir", args.results_dir),
+            ("--output-dir", args.output_dir),
+            ("--run-id", args.run_id),
+        )
+        if value is None
+    ]
+    if missing:
+        parser.error(
+            f"{' and '.join(missing)} required for --action dispersion-benchmark."
+        )
+    if any(
+        value is not None
+        for value in (
+            args.inspection_output,
+            args.resource_dir,
+            args.report_output,
+            args.log_output,
+            args.alignment_dir,
+        )
+    ):
+        parser.error(
+            "Inspection, report, resource and alignment arguments are not valid "
+            "for --action dispersion-benchmark."
+        )
+    if args.distance_source not in {"AUTO", "RESOLVED_GENE_TREE"}:
+        parser.error(
+            "--action dispersion-benchmark uses RESOLVED_GENE_TREE distances."
+        )
+    if args.distance_group_type not in {"AUTO", "HOG"}:
+        parser.error("--action dispersion-benchmark uses the HOG collection.")
+    if args.distance_hierarchy_node != "N0":
+        parser.error("--action dispersion-benchmark uses the N0 HOG hierarchy.")
+    if args.distance_max_groups != 0:
+        parser.error(
+            "--action dispersion-benchmark requires --distance-max-groups 0."
+        )
+    if not 1 <= args.benchmark_controls_per_group <= 50:
+        parser.error("--benchmark-controls-per-group must be between 1 and 50.")
+    if not 100 <= args.benchmark_bootstrap_resamples <= 100_000:
+        parser.error(
+            "--benchmark-bootstrap-resamples must be between 100 and 100,000."
         )
 
 

@@ -179,6 +179,59 @@ publication while the wrapper holds a destination lock. See
 the [complete E3 precursor guide](docs/e3_precursor.md) for the exact contract,
 outputs and downstream parsing guidance.
 
+## Calibrated dispersion benchmarks
+
+Version 0.9.0 adds a matched-background analysis that tests, rather than assumes,
+whether E3, housekeeping-reference candidates and R/NLR candidates occupy clusters
+with different evolutionary dispersion. The bundled Arabidopsis marker authority is
+replaceable. Its classes and subclasses are biological comparison panels; they are
+not expected-result labels.
+
+```bash
+orthofinder-results \
+  --action dispersion-benchmark \
+  --results-dir /path/to/completed/OrthoFinder/results \
+  --output-dir /persistent/path/to/new/dispersion_resource \
+  --run-id my_dispersion_benchmark \
+  --work-dir "${TMPDIR}/orthofinder_dispersion_work" \
+  --distance-max-members 250 \
+  --benchmark-controls-per-group 3 \
+  --benchmark-bootstrap-resamples 1000
+```
+
+Every biological target cluster receives unique non-focus controls matched without
+using distance values. The matching variables are protein count, represented-species
+count, mean copies per species and single-copy-species fraction. Statistical
+replicates are clusters, never the many correlated protein pairs within a cluster.
+The pipeline reports five complementary measures: mean and median distance,
+population SD, interquartile range and coefficient of variation.
+
+Profile contrasts use a matched residual: the target cluster statistic minus the
+median statistic of its own controls. They report the median difference, a
+deterministic bootstrap 95% confidence interval, Cliff's delta, a tie-corrected
+two-sided Mann–Whitney p value and Benjamini–Hochberg FDR q value. Individual
+clusters are also tested against their own controls, pooled E3, housekeeping and
+R/NLR backgrounds, every E3 category and every eligible benchmark subclass.
+Leave-one-out prevents a selected cluster from becoming part of its own reference.
+
+The primary machine-readable outputs are:
+
+- `tables/benchmark_cluster_results.tsv.gz`: one row per biological target or
+  matched-control cluster, with structure, distance summaries and sampling scope;
+- `tables/benchmark_contrasts.tsv.gz`: planned profile-level tests;
+- `tables/benchmark_individual_comparisons.tsv.gz`: each target cluster against
+  every eligible background;
+- `tables/benchmark_cluster_classifications.tsv.gz`: transparent empirical
+  compact/typical/dispersed and low/typical/high-heterogeneity labels;
+- `tables/benchmark_background_statistics.tsv.gz`: raw and matched-residual profile
+  summaries; and
+- `tables/benchmark_matched_controls.tsv.gz`: the auditable control assignment and
+  matching score.
+
+See the [dispersion benchmark guide](docs/dispersion_benchmark.md) for the full
+scientific contract, authority provenance, output dictionary, cluster commands and
+interpretation safeguards.
+
 ## Interactive application
 
 Version 0.8.0 provides the read-only standalone application. It opens either a
@@ -482,7 +535,7 @@ aliases. The recorded `member_identifier_resolution` reports which mapping was
 used. Missing, duplicate and ambiguous mappings fail that cluster explicitly;
 the package never strips prefixes heuristically.
 
-For an ordinary complete run, schema 3 publishes checksum-verified preferred
+For an ordinary complete run, schema 3 or newer publishes checksum-verified preferred
 gene trees as compressed portable payloads regardless of the precomputed
 distance-group bound. Keeping `--distance-max-groups 25` therefore preserves a
 fast opening pilot while the app can calculate other selected groups lazily.
@@ -569,7 +622,8 @@ files, which is suitable for `mosh` sessions:
 The wrapper prints the job identifier, exact output/error log paths and the
 `squeue` command. Unless `--work-dir` is explicitly supplied, each Slurm job
 uses a private directory below `${TMPDIR}`. The dedicated E3 and selection-
-coverage wrappers fail closed if the scheduler did not provide this variable;
+coverage and dispersion-benchmark wrappers fail closed if the scheduler did not
+provide this variable;
 they never substitute a Mac or cluster `/tmp` path. Only a completed, checksum-
 verified result is copied to `--output-dir`. The Dundee launcher defaults to the `barton`
 account and partition, requests ordinary resources, and does not select a
@@ -618,17 +672,18 @@ Open the database with:
 duckdb /path/to/output/duckdb/orthofinder_results.duckdb
 ```
 
-## Scope of version 0.8.0
+## Scope of version 0.9.0
 
-Version 0.8.0 adds complete E3-focused cluster publication to the v0.7
-replaceable authority and taxonomy selection/coverage foundation. The exact
-1,000-record E3 seed catalogue is the current project default, but users can
-replace it and the underlying identifier, membership, distance and tree engines
-remain generic. The standalone app owns OrthoFinder group membership, copy
-number, species breadth, reviewed taxonomy, distances, compactness, trees and
-within-run comparison. Explicit nested-HOG interrogation and cross-run cluster
-lineage (stable overlap scores plus split/merge classification) remain later,
-separately tested generic layers.
+Version 0.9.0 adds calibrated cluster-dispersion benchmarking to the v0.8.1
+complete E3 precursor. The exact 1,000-record E3 seed catalogue and Arabidopsis
+comparison-marker authority are current project defaults, but users can replace
+both. The underlying identifier, membership, distance, tree, matching and
+statistics engines remain data driven. The standalone app owns OrthoFinder group
+membership, copy number, species breadth, reviewed taxonomy, distances,
+compactness, trees, within-run comparison and matched-background inference.
+Explicit nested-HOG interrogation and cross-run cluster lineage (stable overlap
+scores plus split/merge classification) remain later, separately tested generic
+layers.
 
 The dataset-wide page deliberately reports persisted resource results only. It
 does not silently mix calculations from a user's mutable on-demand sidecar into

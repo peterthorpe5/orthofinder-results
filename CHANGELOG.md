@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+## 0.9.0 - 2026-09-10
+
+- Add a checksum-bound Arabidopsis comparison authority containing 13
+  housekeeping-reference candidates and 99 reviewed R/NLR candidates. These
+  panels encode hypotheses to test and never predetermine compact or dispersed
+  outcomes.
+- Add `orthofinder-results --action dispersion-benchmark` for every E3,
+  housekeeping-candidate and R/NLR-candidate HOG at `N0`, plus unique non-focus
+  controls selected without examining distances and matched on protein count,
+  represented-species count, mean copies per species and single-copy fraction.
+- Measure cluster-level mean, median, population SD, interquartile range and
+  coefficient of variation; retain protein pairs as within-cluster observations
+  rather than incorrectly treating them as independent inferential replicates.
+- Test planned E3, E3-category, housekeeping and R/NLR profile contrasts on
+  matched-control residuals using tie-corrected Mann–Whitney tests, Cliff's delta,
+  deterministic bootstrap confidence intervals and Benjamini–Hochberg FDR.
+- Compare every individual biological target cluster with its own matched controls,
+  pooled E3, housekeeping and R/NLR backgrounds, and every eligible subclass or
+  E3 category using leave-one-out empirical tests and family-specific FDR.
+- Publish complete compressed TSV, typed Parquet and DuckDB relations for marker
+  matching, control matching, cluster statistics, background summaries, planned
+  contrasts, individual tests and explicit compact/typical/dispersed classifications.
+- Add a **Calibrated dispersion** application page with selectable metrics and
+  scales, cluster-level distribution plots, confidence-interval forest plots,
+  individual-cluster comparison views, interpretation help and paired TSV or
+  formatted-Excel downloads.
+- Add a portable Slurm wrapper that stages OrthoFinder inputs and authorities under
+  scheduler `TMPDIR`, delegates checksum-verified publication to the pipeline and
+  validates every required compressed result before reporting success.
+- Bump the physical resource contract to schema 4 and retain read-only support for
+  schema-2 and schema-3 resources in the application.
+
 ## 0.8.1 - 2026-09-10
 
 - Attach matching checksum-verified portable tree payloads to persisted DuckDB

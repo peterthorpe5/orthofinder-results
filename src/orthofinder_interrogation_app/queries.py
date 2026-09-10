@@ -36,6 +36,13 @@ MAX_ALL_DISTANCE_RESULTS = 250_000
 MAX_PROTEIN_SEARCH_ROWS = 1_000
 MAX_FOCUS_CLUSTER_ROWS = 250_000
 MAX_GROUP_SPECIES_COLLECTION_ROWS = 5_000_000
+BENCHMARK_METRICS = (
+    "mean_distance",
+    "median_distance",
+    "population_stddev_distance",
+    "distance_interquartile_range",
+    "distance_coefficient_of_variation",
+)
 _MEMBERSHIP_RELATIONS = {
     "HOG": "hog_memberships",
     "LEGACY_ORTHOGROUP": "legacy_orthogroup_memberships",
@@ -276,6 +283,164 @@ class OrthoFinderQueryService:
             parameters=(),
         )
         return tuple(rows)
+
+    def benchmark_profiles(self) -> tuple[dict[str, Any], ...]:
+        """Return available biological dispersion profiles and group counts.
+
+        Returns:
+            One row per stored profile, or an empty tuple for older resources.
+        """
+
+        if not self.has_relation(relation="benchmark_group_profiles"):
+            return ()
+        rows = self._query(
+            sql=(
+                "SELECT profile_id, profile_class, profile_subclass, "
+                "membership_role, count(DISTINCT (group_type, hierarchy_node, "
+                "group_id)) AS group_count FROM benchmark_group_profiles "
+                "GROUP BY profile_id, profile_class, profile_subclass, "
+                "membership_role ORDER BY profile_class, profile_subclass, profile_id"
+            ),
+            parameters=(),
+        )
+        return tuple(rows)
+
+    def benchmark_cluster_catalogue(self) -> tuple[dict[str, Any], ...]:
+        """Return biological target clusters available for individual tests."""
+
+        if not self.has_relation(relation="benchmark_cluster_results"):
+            return ()
+        rows = self._query(
+            sql=(
+                "SELECT run_id, group_type, hierarchy_node, group_id, "
+                "profile_ids, profile_classes, profile_subclasses, member_count, "
+                "species_count, computation_status FROM benchmark_cluster_results "
+                "WHERE membership_roles LIKE '%TARGET%' "
+                "ORDER BY profile_classes, group_type, hierarchy_node, group_id"
+            ),
+            parameters=(),
+        )
+        return tuple(rows)
+
+    def benchmark_distribution(
+        self,
+        *,
+        profile_ids: tuple[str, ...],
+        metric: str,
+        comparison_scale: str,
+    ) -> tuple[dict[str, Any], ...]:
+        """Return cluster-level values for selected benchmark profiles.
+
+        Args:
+            profile_ids: Exact stored biological profile identifiers.
+            metric: Whitelisted cluster dispersion statistic.
+            comparison_scale: ``RAW`` or ``MATCHED_RESIDUAL``.
+
+        Returns:
+            One cluster-level observation per selected profile membership.
+
+        Raises:
+            InputValidationError: If controls are unsupported or unsafe.
+        """
+
+        if metric not in BENCHMARK_METRICS:
+            raise InputValidationError(f"Unsupported benchmark metric: {metric}")
+        if comparison_scale not in {"RAW", "MATCHED_RESIDUAL"}:
+            raise InputValidationError(
+                f"Unsupported benchmark comparison scale: {comparison_scale}"
+            )
+        selected = tuple(dict.fromkeys(profile_ids))
+        if not selected:
+            return ()
+        if not self.has_relation(relation="benchmark_group_profiles"):
+            return ()
+        placeholders = ", ".join("?" for _ in selected)
+        if comparison_scale == "RAW":
+            sql = (
+                "SELECT p.profile_id, p.profile_class, p.profile_subclass, "
+                "c.group_type, c.hierarchy_node, c.group_id, "
+                f"c.{metric} AS metric_value FROM benchmark_group_profiles AS p "
+                "JOIN benchmark_cluster_results AS c USING "
+                "(run_id, group_type, hierarchy_node, group_id) "
+                f"WHERE p.profile_id IN ({placeholders}) AND c.{metric} IS NOT NULL "
+                "ORDER BY p.profile_id, c.group_type, c.hierarchy_node, c.group_id"
+            )
+        else:
+            sql = (
+                "WITH residual AS (SELECT run_id, group_type, hierarchy_node, "
+                "group_id, observed_value, row_number() OVER (PARTITION BY run_id, "
+                "group_type, hierarchy_node, group_id ORDER BY background_profile_id) "
+                "AS residual_rank FROM benchmark_individual_comparisons WHERE "
+                "comparison_scale = 'MATCHED_RESIDUAL' AND metric = ?) "
+                "SELECT p.profile_id, p.profile_class, p.profile_subclass, "
+                "p.group_type, p.hierarchy_node, p.group_id, "
+                "r.observed_value AS metric_value FROM benchmark_group_profiles AS p "
+                "JOIN residual AS r USING (run_id, group_type, hierarchy_node, group_id) "
+                f"WHERE r.residual_rank = 1 AND p.profile_id IN ({placeholders}) "
+                "ORDER BY p.profile_id, p.group_type, p.hierarchy_node, p.group_id"
+            )
+            selected = (metric, *selected)
+        return tuple(self._query(sql=sql, parameters=selected))
+
+    def benchmark_contrasts(
+        self, *, metric: str = ""
+    ) -> tuple[dict[str, Any], ...]:
+        """Return precomputed profile contrasts, optionally for one metric."""
+
+        if metric and metric not in BENCHMARK_METRICS:
+            raise InputValidationError(f"Unsupported benchmark metric: {metric}")
+        if not self.has_relation(relation="benchmark_contrasts"):
+            return ()
+        condition = "WHERE metric = ?" if metric else ""
+        parameters: tuple[object, ...] = (metric,) if metric else ()
+        rows = self._query(
+            sql=(
+                "SELECT * FROM benchmark_contrasts "
+                f"{condition} ORDER BY metric, target_profile_id, reference_profile_id"
+            ),
+            parameters=parameters,
+        )
+        return tuple(rows)
+
+    def benchmark_individual_comparisons(
+        self, *, key: GroupKey, metric: str = ""
+    ) -> tuple[dict[str, Any], ...]:
+        """Return all stored cluster-to-background comparisons for one group."""
+
+        if metric and metric not in BENCHMARK_METRICS:
+            raise InputValidationError(f"Unsupported benchmark metric: {metric}")
+        if not self.has_relation(relation="benchmark_individual_comparisons"):
+            return ()
+        condition = (
+            "run_id = ? AND group_type = ? AND hierarchy_node = ? AND group_id = ?"
+        )
+        parameters: tuple[object, ...] = _key_parameters(key=key)
+        if metric:
+            condition += " AND metric = ?"
+            parameters = (*parameters, metric)
+        rows = self._query(
+            sql=(
+                "SELECT * FROM benchmark_individual_comparisons WHERE "
+                f"{condition} ORDER BY comparison_scale, metric, background_profile_id"
+            ),
+            parameters=parameters,
+        )
+        return tuple(rows)
+
+    def benchmark_classifications(self) -> tuple[dict[str, Any], ...]:
+        """Return matched-control central-divergence and spread classes."""
+
+        if not self.has_relation(relation="benchmark_cluster_classifications"):
+            return ()
+        return tuple(
+            self._query(
+                sql=(
+                    "SELECT * FROM benchmark_cluster_classifications "
+                    "ORDER BY group_type, hierarchy_node, group_id"
+                ),
+                parameters=(),
+            )
+        )
 
     def distance_result_facets(self) -> dict[str, tuple[str, ...]]:
         """Return exact stored-distance values available for export filters.

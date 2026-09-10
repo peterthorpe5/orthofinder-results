@@ -47,7 +47,7 @@ class _FakeStreamlit:
 def test_graph_registry_is_complete_and_plain_language() -> None:
     """Every supported graph has all three required interpretation fields."""
 
-    assert len(guidance.GRAPH_GUIDANCE) == 16
+    assert len(guidance.GRAPH_GUIDANCE) == 19
     for key, record in guidance.GRAPH_GUIDANCE.items():
         assert key
         assert record.title
@@ -84,9 +84,10 @@ def test_every_rendered_graph_has_a_guidance_panel() -> None:
     files = (
         source_root / "orthofinder_interrogation_app" / "evolutionary_page.py",
         source_root / "orthofinder_interrogation_app" / "comparison_page.py",
+        source_root / "orthofinder_interrogation_app" / "benchmark_page.py",
     )
     source = "\n".join(path.read_text(encoding="utf-8") for path in files)
     graph_count = source.count("st.plotly_chart(") + source.count("st.iframe(")
     guidance_count = source.count("render_graph_guidance(key=")
-    assert graph_count == 16
+    assert graph_count == 19
     assert guidance_count == graph_count
