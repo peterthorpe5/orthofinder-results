@@ -9,8 +9,9 @@ from typing import Any, Mapping, Sequence
 import streamlit as st
 
 from .benchmark_labels import benchmark_class_label, benchmark_profile_label
+from .documentation_page import render_page_guidance
 from .evolutionary_page import _store_active_group
-from .exports import render_table_downloads
+from .exports import render_plotly_figure, render_table_downloads
 from .figures import (
     benchmark_classification_figure,
     benchmark_contrast_figure,
@@ -90,6 +91,11 @@ _CLASSIFICATION_HELP = {
     "Matched controls": "Number of distance-blind matched controls used.",
     "Status": "CLASSIFIED or an explicit insufficient-control state.",
 }
+_CLASSIFICATION_COUNT_HELP = {
+    "Central divergence class": "Matched-control class based on average pair distance.",
+    "Heterogeneity class": "Matched-control class based on pair-distance population SD.",
+    "Clusters": "Number of biological target clusters in this class combination.",
+}
 _CONTRAST_HELP = {
     "Target profile": "Readable profile whose residual is compared with the reference.",
     "Target profile ID": "Exact machine-readable target profile.",
@@ -131,6 +137,7 @@ def render_dispersion_benchmarks(*, service: OrthoFinderQueryService) -> None:
     """
 
     st.header("Calibrated dispersion results")
+    render_page_guidance(key="dispersion_benchmarks")
     st.write(
         "Compare E3 clusters with housekeeping-reference, R/NLR-reference and "
         "structure-matched non-focus clusters. The page leads with the biological result; "
@@ -268,15 +275,14 @@ def _render_results_summary(
     )
     if distribution_rows:
         render_graph_guidance(key="benchmark_distribution")
-        st.plotly_chart(
-            benchmark_distribution_figure(
+        render_plotly_figure(
+            figure=benchmark_distribution_figure(
                 rows=distribution_rows,
                 metric_label=metric_label,
                 scale_label=_SCALE_LABELS["MATCHED_RESIDUAL"],
             ),
+            file_stem=f"orthofinder_broad_profile_distribution_{metric}",
             key=f"benchmark_summary_distribution_{metric}",
-            width="stretch",
-            config={"displaylogo": False},
         )
     else:
         st.warning("No matched-control residuals were available for the broad profiles.")
@@ -284,11 +290,10 @@ def _render_results_summary(
     st.subheader("Which individual clusters are compact, dispersed or heterogeneous?")
     if classifications:
         render_graph_guidance(key="benchmark_classification")
-        st.plotly_chart(
-            benchmark_classification_figure(rows=classifications),
+        render_plotly_figure(
+            figure=benchmark_classification_figure(rows=classifications),
+            file_stem="orthofinder_matched_control_cluster_map",
             key="benchmark_summary_classification",
-            width="stretch",
-            config={"displaylogo": False},
         )
         displayed = tuple(_display_classification(row=row) for row in classifications)
         summary = Counter(
@@ -308,6 +313,15 @@ def _render_results_summary(
                 for (central, spread), count in sorted(summary.items())
             )
             st.dataframe(count_rows, width="stretch", hide_index=True)
+            render_table_downloads(
+                records=count_rows,
+                file_stem="orthofinder_dispersion_classification_counts",
+                key="benchmark_classification_count_download",
+                tsv_label="Download classification counts as TSV",
+                excel_label="Download classification counts as formatted Excel",
+                column_definitions=_CLASSIFICATION_COUNT_HELP,
+                workbook_title="OrthoFinder dispersion classification counts",
+            )
             st.dataframe(
                 displayed,
                 width="stretch",
@@ -392,11 +406,13 @@ def _render_marker_browser(
     metrics[1].metric("Matched OrthoFinder clusters", f"{len(group_keys):,}")
     metrics[2].metric("Matched proteins in this run", f"{len(matched_proteins):,}")
     render_graph_guidance(key="benchmark_marker_coverage")
-    st.plotly_chart(
-        benchmark_marker_coverage_figure(rows=marker_rows),
+    render_plotly_figure(
+        figure=benchmark_marker_coverage_figure(rows=marker_rows),
+        file_stem=(
+            "orthofinder_marker_coverage_"
+            f"{_safe_file_token(value=selected_profile)}"
+        ),
         key=f"benchmark_marker_coverage_{_safe_file_token(value=selected_profile)}",
-        width="stretch",
-        config={"displaylogo": False},
     )
     if len(marker_ids) > 40:
         st.caption(
@@ -543,15 +559,14 @@ def _render_detailed_results(
     )
     if distribution_rows:
         render_graph_guidance(key="benchmark_distribution")
-        st.plotly_chart(
-            benchmark_distribution_figure(
+        render_plotly_figure(
+            figure=benchmark_distribution_figure(
                 rows=distribution_rows,
                 metric_label=metric_label,
                 scale_label=scale_label,
             ),
+            file_stem=f"orthofinder_profile_distribution_{metric}_{scale}",
             key=f"benchmark_detailed_distribution_{metric}_{scale}",
-            width="stretch",
-            config={"displaylogo": False},
         )
     else:
         st.warning("No eligible cluster-level values match these profile controls.")
@@ -608,24 +623,33 @@ def _render_detailed_results(
     )
     if any(row["status"] == "TESTED" for row in filtered_contrasts):
         render_graph_guidance(key="benchmark_contrast")
-        st.plotly_chart(
-            benchmark_contrast_figure(
+        render_plotly_figure(
+            figure=benchmark_contrast_figure(
                 rows=filtered_contrasts,
                 metric_label=metric_label,
             ),
+            file_stem=f"orthofinder_profile_contrasts_{metric}",
             key=f"benchmark_contrast_forest_{metric}",
-            width="stretch",
-            config={"displaylogo": False},
         )
     else:
         st.info("No tested contrasts match the current target and reference filters.")
     displayed_filtered = tuple(_display_contrast(row=row) for row in filtered_contrasts)
-    st.dataframe(
-        displayed_filtered,
-        width="stretch",
-        hide_index=True,
-        column_config=_column_config(descriptions=_CONTRAST_HELP),
-    )
+    if displayed_filtered:
+        st.dataframe(
+            displayed_filtered,
+            width="stretch",
+            hide_index=True,
+            column_config=_column_config(descriptions=_CONTRAST_HELP),
+        )
+        render_table_downloads(
+            records=displayed_filtered,
+            file_stem=f"orthofinder_dispersion_filtered_contrasts_{metric}",
+            key=f"benchmark_filtered_contrasts_download_{metric}",
+            tsv_label="Download displayed contrasts as TSV",
+            excel_label="Download displayed contrasts as formatted Excel",
+            column_definitions=_CONTRAST_HELP,
+            workbook_title="Displayed OrthoFinder dispersion contrasts",
+        )
     displayed_contrasts = tuple(_display_contrast(row=row) for row in contrast_rows)
     render_table_downloads(
         records=displayed_contrasts,
@@ -670,31 +694,48 @@ def _render_detailed_results(
             tested_rows = tuple(row for row in rows if row["status"] == "TESTED")
             if tested_rows:
                 render_graph_guidance(key="benchmark_individual")
-                st.plotly_chart(
-                    benchmark_individual_figure(
+                figure_key = (
+                    "benchmark_individual_"
+                    f"{key.group_type}_{key.hierarchy_node}_{key.group_id}_"
+                    f"{metric}_{row_scale}"
+                )
+                render_plotly_figure(
+                    figure=benchmark_individual_figure(
                         rows=tested_rows,
                         metric_label=metric_label,
                         scale_label=row_scale_label,
                     ),
-                    key=(
-                        "benchmark_individual_"
-                        f"{key.group_type}_{key.hierarchy_node}_{key.group_id}_"
-                        f"{metric}_{row_scale}"
+                    file_stem=(
+                        f"orthofinder_individual_{key.group_id}_{metric}_{row_scale}"
                     ),
-                    width="stretch",
-                    config={"displaylogo": False},
+                    key=figure_key,
                 )
             else:
                 st.info(
                     "No comparison at this scale has the minimum three eligible "
                     "background clusters. Explicit insufficient rows remain below."
                 )
-            st.dataframe(
-                tuple(_display_individual(row=row) for row in rows),
-                width="stretch",
-                hide_index=True,
-                column_config=_column_config(descriptions=_INDIVIDUAL_HELP),
-            )
+            displayed_scale = tuple(_display_individual(row=row) for row in rows)
+            if displayed_scale:
+                st.dataframe(
+                    displayed_scale,
+                    width="stretch",
+                    hide_index=True,
+                    column_config=_column_config(descriptions=_INDIVIDUAL_HELP),
+                )
+                render_table_downloads(
+                    records=displayed_scale,
+                    file_stem=(
+                        f"orthofinder_individual_{key.group_id}_{metric}_{row_scale}"
+                    ),
+                    key=(
+                        f"benchmark_individual_table_{key.group_id}_{metric}_{row_scale}"
+                    ),
+                    tsv_label="Download displayed comparisons as TSV",
+                    excel_label="Download displayed comparisons as formatted Excel",
+                    column_definitions=_INDIVIDUAL_HELP,
+                    workbook_title="Displayed individual dispersion comparisons",
+                )
     displayed_individual = tuple(
         _display_individual(row=row) for row in individual_rows
     )

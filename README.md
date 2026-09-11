@@ -243,6 +243,19 @@ That tab shows the exact E3, housekeeping or R/NLR markers used, their matched
 proteins and clusters, every member of a selected cluster, and paired TSV or
 formatted-Excel downloads. It does not require a new cluster run or DuckDB transfer.
 
+Version 0.9.2 is another schema-compatible viewer update. Every analytical page now
+has a result-led interpretation dropdown, and each graph explanation includes common
+result patterns plus the quantitative view that should be checked next. Dedicated
+**Methods & provenance** and searchable **Glossary** pages explain the complete route
+from the upstream OrthoFinder run to the read-only app. Every visible table has TSV and
+formatted-Excel downloads, and every quantitative figure has a PDF export. Plotly PDF
+generation uses Kaleido and a compatible Chrome or Chromium installation; the Mac app
+will normally discover Google Chrome automatically. The draggable network additionally
+has a self-contained HTML download because a static PDF cannot retain interaction.
+
+No schema-4 resource, benchmark statistic, Slurm workflow or 1.5-GiB completed resource
+is changed by this release.
+
 ## Interactive application
 
 Version 0.8.0 provides the read-only standalone application. It opens either a

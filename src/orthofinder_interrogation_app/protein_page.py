@@ -11,6 +11,7 @@ import streamlit as st
 
 from orthofinder_results.errors import InputValidationError, OrthoFinderResultsError
 
+from .documentation_page import render_page_guidance
 from .evolutionary_page import render_selected_group_visualisations
 from .exports import render_table_downloads
 from .models import GroupKey, ProteinSearchFilters
@@ -80,6 +81,7 @@ def render_protein_search(
     """
 
     st.header("Find a gene or protein")
+    render_page_guidance(key="protein_search")
     st.write(
         "Enter a protein identifier to find every HOG and legacy orthogroup containing it. "
         "Choose one result to highlight that protein across the full cluster visualisation "

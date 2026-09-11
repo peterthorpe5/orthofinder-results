@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orthofinder-results"
-version = "0.9.1"
+version = "0.9.2"
 description = "Version-aware, queryable interrogation of OrthoFinder result sets"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -20,6 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 app = [
+  "kaleido>=1,<2",
   "networkx>=3,<4",
   "plotly>=6,<7",
   "scipy>=1.14,<2",
@@ -29,6 +30,7 @@ app = [
 dev = [
   "coverage>=7.6,<8",
   "build>=1.2,<2",
+  "kaleido>=1,<2",
   "pycodestyle>=2.12,<3",
   "pydocstyle>=6.3,<7",
   "pytest>=8,<9",

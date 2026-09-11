@@ -14,6 +14,11 @@ from orthofinder_interrogation_app.benchmark_page import render_dispersion_bench
 from orthofinder_interrogation_app.comparison_page import render_cluster_comparison
 from orthofinder_interrogation_app.coverage_page import render_selection_coverage_tree
 from orthofinder_interrogation_app.distance_data import default_cache_directory
+from orthofinder_interrogation_app.documentation_page import (
+    render_glossary_page,
+    render_methods_page,
+    render_page_guidance,
+)
 from orthofinder_interrogation_app.evolutionary_page import (
     _comparison_keys,
     _store_active_group,
@@ -55,6 +60,8 @@ _PAGES = (
     "Taxonomic search",
     "Selection coverage tree",
     "Offline report",
+    "Methods",
+    "Glossary",
     "Help",
 )
 _PAGE_LABELS = {
@@ -69,7 +76,9 @@ _PAGE_LABELS = {
     "Taxonomic search": "Taxonomic search",
     "Selection coverage tree": "Selection coverage tree",
     "Offline report": "Download report",
-    "Help": "Help & glossary",
+    "Methods": "Methods & provenance",
+    "Glossary": "Glossary",
+    "Help": "Using the app",
 }
 _INCLUDE_LABEL_TO_MODE = {
     "At least one selected species": "ANY",
@@ -261,6 +270,10 @@ def main() -> None:
             )
         elif page_name == "Offline report":
             _render_offline_report(resource=resource)
+        elif page_name == "Methods":
+            render_methods_page(resource=resource)
+        elif page_name == "Glossary":
+            render_glossary_page()
         else:
             _render_help()
     except OrthoFinderResultsError as error:
@@ -348,6 +361,7 @@ def _render_overview(*, service: OrthoFinderQueryService) -> None:
     """Render a guided landing page before exposing technical detail."""
 
     st.header("Dataset summary")
+    render_page_guidance(key="overview")
     st.write(
         "This page is the starting point. It describes what is in the completed run, "
         "what can be analysed now, and which page to use for each biological question."
@@ -514,6 +528,15 @@ def _render_overview(*, service: OrthoFinderQueryService) -> None:
             hide_index=True,
             column_config=_column_config(descriptions=_AUTHORITY_COLUMN_HELP),
         )
+        render_table_downloads(
+            records=authorities,
+            file_stem="orthofinder_group_authority_summary",
+            key="overview_group_authority_download",
+            tsv_label="Download group authority summary as TSV",
+            excel_label="Download group authority summary as formatted Excel",
+            column_definitions=_AUTHORITY_COLUMN_HELP,
+            workbook_title="OrthoFinder group authority summary",
+        )
         st.caption(
             f"The database also contains {counts['group_species_statistic_count']:,} "
             "group-by-species copy-count rows used by species and taxonomy filters."
@@ -544,6 +567,7 @@ def _render_group_search(*, service: OrthoFinderQueryService) -> None:
     """Render progressive exact group filters and reusable selected-group actions."""
 
     st.header("Find groups")
+    render_page_guidance(key="group_search")
     st.caption(
         "Start with species or an identifier; open Advanced filters only when needed. "
         "Required species and rejected species use the exact labels in this dataset."
@@ -865,6 +889,7 @@ def _render_offline_report(*, resource: Any) -> None:
     """Expose the immutable offline report as a download."""
 
     st.header("Download the offline report")
+    render_page_guidance(key="offline_report")
     if resource.report_path is None:
         st.warning("This resource does not contain an offline HTML report.")
         return
@@ -881,12 +906,13 @@ def _render_offline_report(*, resource: Any) -> None:
 
 
 def _render_help() -> None:
-    """Render task-oriented help and an expandable scientific glossary."""
+    """Render task-oriented help for navigating the application."""
 
-    st.header("Help & glossary")
+    st.header("Using the app")
     st.write(
         "Look for the **?** beside controls and column headings for help in context. "
-        "The sections below explain the same terms in more detail."
+        "Every analytical page and figure also has a closed interpretation panel. Use "
+        "**Methods & provenance** for the workflow and **Glossary** for exact terms."
     )
     with st.expander("Getting started", expanded=True):
         st.markdown(
@@ -900,6 +926,10 @@ def _render_help() -> None:
                sampling scope are scientifically comparable.
             6. Use **All distance results** to select columns and export every cluster with a
                persisted distance summary as formatted Excel or TSV.
+            7. Open **Methods & provenance** for the complete analytical route and the exact
+               capabilities of the resource currently open.
+            8. Search **Glossary** whenever a biological, statistical, tree or data-contract
+               term is unfamiliar.
 
             **Taxonomic search** is a separate, stricter workflow because descendant claims
             require a reviewed species-to-taxonomy mapping. The packaged Results_Feb26
@@ -1022,12 +1052,13 @@ def _render_help() -> None:
     with st.expander("Resource schemas, caches and provenance"):
         st.markdown(
             """
-            Schema 3 stores checksum-bound portable gene trees rather than billions of pair
+            Schemas 3 and 4 store checksum-bound portable gene trees rather than billions of pair
             matrices. The app can calculate one bounded matrix when requested and caches it in
-            a user sidecar outside the immutable resource. Schema 2 remains readable but normally
-            exposes distances only for its original pilot groups. Method, status, source and
-            cache details remain available under **Technical analysis details** and in relevant
-            downloadable tables.
+            a user sidecar outside the immutable resource. Schema 4 also adds the calibrated-
+            dispersion profile, control, contrast, individual-test and classification relations.
+            Schema 2 remains readable but normally exposes distances only for its original pilot
+            groups. Method, status, source and cache details remain available under **Technical
+            analysis details**, **Methods & provenance** and relevant downloadable tables.
             """
         )
 

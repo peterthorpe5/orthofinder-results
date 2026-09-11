@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import ast
 from datetime import date, datetime
 from io import BytesIO
+from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
@@ -15,14 +17,10 @@ from orthofinder_results.errors import InputValidationError
 def test_safe_file_stem_and_scalar_normalisation_are_defensive() -> None:
     """Filenames and uncommon scientific values remain portable and loss-aware."""
 
-    assert exports.safe_file_stem(value="N0.HOG1: selected rows") == (
-        "N0.HOG1_selected_rows"
-    )
+    assert exports.safe_file_stem(value="N0.HOG1: selected rows") == ("N0.HOG1_selected_rows")
     assert exports.normalise_excel_scalar(value=None) is None
     assert exports.normalise_excel_scalar(value={"b", "a"}) == '["a", "b"]'
-    assert exports.normalise_excel_scalar(value=1234567890123456) == (
-        "1234567890123456"
-    )
+    assert exports.normalise_excel_scalar(value=1234567890123456) == ("1234567890123456")
     assert exports.normalise_excel_scalar(value=float("inf")) == "inf"
     assert exports.normalise_excel_scalar(value=object()).startswith("<object object at")
     with pytest.raises(TypeError, match="must be text"):
@@ -53,10 +51,13 @@ def test_excel_format_kind_uses_scientific_semantics(
 ) -> None:
     """Identifiers, counts, fractions and measurements receive stable formats."""
 
-    assert exports.excel_format_kind(
-        column_name=column_name,
-        values=values,
-    ) == expected
+    assert (
+        exports.excel_format_kind(
+            column_name=column_name,
+            values=values,
+        )
+        == expected
+    )
     with pytest.raises(ValueError, match="non-empty"):
         exports.excel_format_kind(column_name="", values=values)
 
@@ -65,9 +66,7 @@ def test_excel_column_width_is_readable_and_bounded() -> None:
     """Column widths expand for content without becoming unusably narrow or wide."""
 
     assert exports.excel_column_width(column_name="Rank", values=(1, 2)) == 12.0
-    assert exports.excel_column_width(
-        column_name="Description", values=("x" * 200,)
-    ) == 50.0
+    assert exports.excel_column_width(column_name="Description", values=("x" * 200,)) == 50.0
     with pytest.raises(ValueError, match="non-empty"):
         exports.excel_column_width(column_name="", values=(1,))
 
@@ -231,3 +230,206 @@ def test_render_table_downloads_preserves_tsv_and_adds_excel(
             file_stem="result",
             key="result",
         )
+
+
+class _FakeFigure:
+    """Return deterministic PDF bytes from a Plotly-compatible interface."""
+
+    def __init__(self, *, payload: object = b"%PDF-1.7\nfixture") -> None:
+        """Store the renderer payload and captured keyword arguments."""
+
+        self.payload = payload
+        self.calls: list[dict[str, object]] = []
+
+    def to_image(self, **kwargs: object) -> object:
+        """Capture export arguments and return the configured payload."""
+
+        self.calls.append(kwargs)
+        return self.payload
+
+
+class _BrokenFigure:
+    """Raise an environmental error from the static renderer."""
+
+    def to_image(self, **kwargs: object) -> bytes:
+        """Raise a renderer failure for defensive error testing."""
+
+        del kwargs
+        raise RuntimeError("missing browser")
+
+
+class _FakePlotStreamlit:
+    """Capture one Plotly render and its deferred download control."""
+
+    def __init__(self) -> None:
+        """Initialise captured chart and button calls."""
+
+        self.charts: list[dict[str, object]] = []
+        self.calls: list[dict[str, object]] = []
+
+    def plotly_chart(self, figure: object, **kwargs: object) -> str:
+        """Capture the figure and return a stable event sentinel."""
+
+        self.charts.append({"figure": figure, **kwargs})
+        return "event"
+
+    def download_button(self, **kwargs: object) -> None:
+        """Capture one download control."""
+
+        self.calls.append(kwargs)
+
+
+def test_plotly_figure_pdf_bytes_validate_renderer_and_dimensions() -> None:
+    """PDF generation accepts valid bytes and explains renderer failures."""
+
+    figure = _FakeFigure()
+    payload = exports.plotly_figure_to_pdf_bytes(
+        figure=figure,
+        width=1200,
+        height=800,
+    )
+    assert payload.startswith(b"%PDF")
+    assert figure.calls == [{"format": "pdf", "width": 1200, "height": 800, "scale": 1}]
+    with pytest.raises(InputValidationError, match="width"):
+        exports.plotly_figure_to_pdf_bytes(figure=figure, width=100)
+    with pytest.raises(InputValidationError, match="height"):
+        exports.plotly_figure_to_pdf_bytes(figure=figure, height=100)
+    with pytest.raises(InputValidationError, match="Plotly-compatible"):
+        exports.plotly_figure_to_pdf_bytes(figure=object())
+    with pytest.raises(InputValidationError, match="Kaleido"):
+        exports.plotly_figure_to_pdf_bytes(figure=_BrokenFigure())
+    with pytest.raises(InputValidationError, match="valid PDF"):
+        exports.plotly_figure_to_pdf_bytes(figure=_FakeFigure(payload=b"not-pdf"))
+
+
+def test_render_plotly_figure_adds_deferred_pdf_download(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every Plotly result receives an on-demand PDF generated from that figure."""
+
+    fake = _FakePlotStreamlit()
+    figure = _FakeFigure()
+    monkeypatch.setattr(exports, "st", fake)
+    event = exports.render_plotly_figure(
+        figure=figure,
+        file_stem="N0.HOG1 result figure",
+        key="figure_key",
+        on_select="rerun",
+        selection_mode="points",
+    )
+    assert event == "event"
+    assert fake.charts[0]["key"] == "figure_key"
+    assert fake.charts[0]["on_select"] == "rerun"
+    assert fake.calls[0]["file_name"] == "N0.HOG1_result_figure.pdf"
+    assert fake.calls[0]["mime"] == exports.PDF_MIME_TYPE
+    deferred = fake.calls[0]["data"]
+    assert callable(deferred)
+    assert deferred().startswith(b"%PDF")
+    with pytest.raises(ValueError, match="non-empty key"):
+        exports.render_plotly_figure(
+            figure=figure,
+            file_stem="figure",
+            key="",
+        )
+    monkeypatch.setattr(exports, "st", None)
+    with pytest.raises(RuntimeError, match="Streamlit"):
+        exports.render_plotly_figure(
+            figure=figure,
+            file_stem="figure",
+            key="figure",
+        )
+
+
+def test_interactive_html_download_is_validated_and_preserves_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Interactive networks retain a self-contained HTML download beside the PDF view."""
+
+    fake = _FakePlotStreamlit()
+    monkeypatch.setattr(exports, "st", fake)
+    exports.render_html_download(
+        document="<!doctype html><html><body>network</body></html>",
+        file_stem="interactive network",
+        key="network_html",
+    )
+    assert fake.calls[0]["file_name"] == "interactive_network.html"
+    assert fake.calls[0]["mime"] == exports.HTML_MIME_TYPE
+    assert "network" in str(fake.calls[0]["data"])
+    with pytest.raises(InputValidationError, match="non-empty document"):
+        exports.render_html_download(document=" ", file_stem="network", key="key")
+    with pytest.raises(ValueError, match="non-empty key"):
+        exports.render_html_download(document="<html />", file_stem="network", key="")
+    monkeypatch.setattr(exports, "st", None)
+    with pytest.raises(RuntimeError, match="Streamlit"):
+        exports.render_html_download(
+            document="<html />",
+            file_stem="network",
+            key="key",
+        )
+
+
+def _named_call_count(*, node: ast.AST, function_name: str) -> int:
+    """Count calls to one imported function name below an AST node."""
+
+    return sum(
+        isinstance(candidate, ast.Call)
+        and isinstance(candidate.func, ast.Name)
+        and candidate.func.id == function_name
+        for candidate in ast.walk(node)
+    )
+
+
+def _streamlit_call_count(*, node: ast.AST, method_name: str) -> int:
+    """Count calls to one ``st`` method below an AST node."""
+
+    return sum(
+        isinstance(candidate, ast.Call)
+        and isinstance(candidate.func, ast.Attribute)
+        and candidate.func.attr == method_name
+        and isinstance(candidate.func.value, ast.Name)
+        and candidate.func.value.id == "st"
+        for candidate in ast.walk(node)
+    )
+
+
+def test_every_result_table_and_figure_has_its_required_export_controls() -> None:
+    """Guard the app-wide TSV, Excel, PDF and interactive-export contract."""
+
+    package = Path(__file__).resolve().parents[1] / "src/orthofinder_interrogation_app"
+    page_paths = tuple(sorted(package.glob("*_page.py"))) + (package / "app.py",)
+    audited_tables = 0
+    plotted_figures = 0
+    for path in page_paths:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for function in (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ):
+            table_count = _streamlit_call_count(node=function, method_name="dataframe")
+            download_count = _named_call_count(
+                node=function,
+                function_name="render_table_downloads",
+            )
+            assert download_count >= table_count, (
+                f"{path.name}:{function.name} renders {table_count} table(s) but only "
+                f"{download_count} paired TSV/Excel control(s)."
+            )
+            audited_tables += table_count
+        plotted_figures += _named_call_count(
+            node=tree,
+            function_name="render_plotly_figure",
+        )
+    assert audited_tables >= 25
+    assert plotted_figures >= 20
+
+    coverage_source = (package / "coverage_page.py").read_text(encoding="utf-8")
+    assert "st.plotly_chart(" in coverage_source
+    assert 'files["selection_coverage_tree.pdf"]' in coverage_source
+
+    evolutionary_source = (package / "evolutionary_page.py").read_text(
+        encoding="utf-8"
+    )
+    assert "st.iframe(" in evolutionary_source
+    assert "render_html_download(" in evolutionary_source
+    assert "_render_topology(" in evolutionary_source

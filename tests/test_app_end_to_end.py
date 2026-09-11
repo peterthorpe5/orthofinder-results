@@ -47,9 +47,7 @@ def test_overview_group_search_and_help_routes(
     assert any(metric.label == "Group records" and metric.value == "4" for metric in test.metric)
     assert any(header.value == "Dataset summary" for header in test.header)
     assert any("Which groups contain my species?" in item.value for item in test.markdown)
-    next(
-        button for button in test.button if button.label == "Find E3 focus clusters"
-    ).click()
+    next(button for button in test.button if button.label == "Find E3 focus clusters").click()
     test.run()
     assert not test.exception
     assert any(header.value == "Focus protein clusters" for header in test.header)
@@ -63,8 +61,35 @@ def test_overview_group_search_and_help_routes(
     test.sidebar.radio[0].set_value("Help")
     test.run()
     assert not test.exception
-    assert any(header.value == "Help & glossary" for header in test.header)
+    assert any(header.value == "Using the app" for header in test.header)
     assert any("Exactly the selected species set" in markdown.value for markdown in test.markdown)
+
+
+def test_methods_and_glossary_routes_are_complete_and_downloadable(
+    application_resource: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Methods and glossary pages render against the validated resource end to end."""
+
+    test = _application_test(
+        application_resource=application_resource,
+        monkeypatch=monkeypatch,
+    )
+    test.sidebar.radio[0].set_value("Methods")
+    test.run()
+    assert not test.exception
+    assert any(header.value == "Methods and provenance" for header in test.header)
+    assert any(subheader.value == "Opened resource" for subheader in test.subheader)
+    assert any("Completed OrthoFinder analysis" in expander.label for expander in test.expander)
+    assert len(test.get("download_button")) >= 4
+
+    test.sidebar.radio[0].set_value("Glossary")
+    test.run()
+    assert not test.exception
+    assert any(header.value == "Glossary" for header in test.header)
+    assert any("terms shown" in caption.value for caption in test.caption)
+    assert test.dataframe
+    assert len(test.get("download_button")) >= 2
 
 
 def test_offline_report_and_invalid_resource_routes(
@@ -126,9 +151,7 @@ def test_dispersion_benchmark_route_explains_older_resources(
     test.sidebar.radio[0].set_value("Dispersion benchmarks")
     test.run()
     assert not test.exception
-    assert any(
-        header.value == "Calibrated dispersion results" for header in test.header
-    )
+    assert any(header.value == "Calibrated dispersion results" for header in test.header)
     assert any("predates matched-background" in item.value for item in test.info)
 
 
@@ -145,17 +168,12 @@ def test_dispersion_benchmark_route_renders_complete_inference(
     test.sidebar.radio[0].set_value("Dispersion benchmarks")
     test.run()
     assert not test.exception
-    assert any(
-        header.value == "Calibrated dispersion results" for header in test.header
-    )
+    assert any(header.value == "Calibrated dispersion results" for header in test.header)
     assert any(
         subheader.value == "Genes and proteins defining each biological profile"
         for subheader in test.subheader
     )
-    assert any(
-        subheader.value == "Compare biological backgrounds"
-        for subheader in test.subheader
-    )
+    assert any(subheader.value == "Compare biological backgrounds" for subheader in test.subheader)
     assert any(
         subheader.value == "Test one cluster against every background"
         for subheader in test.subheader
@@ -163,10 +181,7 @@ def test_dispersion_benchmark_route_renders_complete_inference(
     assert len(test.dataframe) >= 4
     assert len(test.get("plotly_chart")) >= 4
     assert len(test.get("download_button")) >= 6
-    assert any(
-        "predetermined answers" in item.value
-        for item in test.markdown
-    )
+    assert any("predetermined answers" in item.value for item in test.markdown)
 
 
 def test_focus_protein_clusters_use_custom_authority_and_open_visuals(
@@ -284,13 +299,8 @@ def test_focus_and_coverage_pages_explain_empty_or_invalid_authorities(
     test.sidebar.radio[0].set_value("Selection coverage tree")
     test.run()
     assert not test.exception
-    assert any(
-        "species-to-taxonomy review template" in item.value
-        for item in test.warning
-    )
-    assert any(
-        "not an E3 protein list" in item.value for item in test.markdown
-    )
+    assert any("species-to-taxonomy review template" in item.value for item in test.warning)
+    assert any("not an E3 protein list" in item.value for item in test.markdown)
     assert any(
         button.label == "Download this dataset's taxonomy review template"
         for button in test.get("download_button")

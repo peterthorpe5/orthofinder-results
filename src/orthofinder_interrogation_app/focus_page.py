@@ -12,6 +12,7 @@ import streamlit as st
 
 from orthofinder_results.errors import InputValidationError, OrthoFinderResultsError
 
+from .documentation_page import render_page_guidance
 from .evolutionary_page import render_selected_group_visualisations
 from .exports import render_table_downloads
 from .focus import (
@@ -63,6 +64,7 @@ def render_focus_clusters(
     """
 
     st.header("Focus protein clusters")
+    render_page_guidance(key="focus_clusters")
     st.write(
         "Start with the packaged E3 seed-evidence authority, or replace it with a reviewed "
         "project protein list. Matching is exact and identifies clusters containing at least "

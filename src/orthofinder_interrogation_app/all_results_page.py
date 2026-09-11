@@ -10,6 +10,7 @@ import streamlit as st
 
 from orthofinder_results.errors import InputValidationError
 
+from .documentation_page import render_page_guidance
 from .exports import render_table_downloads
 from .models import DistanceResultFilters
 from .queries import MAX_ALL_DISTANCE_RESULTS, OrthoFinderQueryService
@@ -185,6 +186,7 @@ def render_all_distance_results(*, service: OrthoFinderQueryService) -> None:
     """
 
     st.header("All distance results")
+    render_page_guidance(key="all_distance_results")
     st.write(
         "Build one dataset-wide table containing every cluster with a successful persisted "
         "distance summary. Choose the biological and provenance columns needed for analysis, "

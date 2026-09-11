@@ -12,12 +12,13 @@ from orthofinder_results.errors import OrthoFinderResultsError
 
 from .dispersion import PcoaGeometry, classical_pcoa
 from .distance_data import DistanceAnalysisProvider, GroupAnalysis
+from .documentation_page import render_page_guidance
 from .evolutionary_page import (
     _comparison_keys,
     _load_catalog,
     _store_comparison_keys,
 )
-from .exports import render_table_downloads
+from .exports import render_plotly_figure, render_table_downloads
 from .figures import (
     comparison_distribution_figure,
     comparison_pcoa_figure,
@@ -57,6 +58,7 @@ def render_cluster_comparison(
     """
 
     st.header("Compare clusters")
+    render_page_guidance(key="cluster_comparison")
     st.caption(
         "Compare compactness and distance spread across 2–12 groups. Start with the summary "
         "and distributions; use the PCoA panels to compare within-group shape."
@@ -155,10 +157,10 @@ def render_cluster_comparison(
         return
     summaries = _comparison_summaries(analyses=tuple(analyses))
     render_graph_guidance(key="comparison_summary")
-    st.plotly_chart(
-        comparison_summary_figure(summaries=summaries),
-        width="stretch",
-        config={"displaylogo": False},
+    render_plotly_figure(
+        figure=comparison_summary_figure(summaries=summaries),
+        file_stem="orthofinder_cluster_comparison_summary",
+        key="cluster_comparison_summary",
     )
     distributions = {
         analysis.key.display_label(): tuple(
@@ -174,23 +176,23 @@ def render_cluster_comparison(
     distribution_tabs = st.tabs(("Violin distributions", "Cumulative distributions"))
     with distribution_tabs[0]:
         render_graph_guidance(key="comparison_violin")
-        st.plotly_chart(
-            comparison_distribution_figure(
+        render_plotly_figure(
+            figure=comparison_distribution_figure(
                 distance_groups=distributions,
                 mode="VIOLIN",
             ),
-            width="stretch",
-            config={"displaylogo": False},
+            file_stem="orthofinder_cluster_comparison_violin",
+            key="cluster_comparison_violin",
         )
     with distribution_tabs[1]:
         render_graph_guidance(key="comparison_ecdf")
-        st.plotly_chart(
-            comparison_distribution_figure(
+        render_plotly_figure(
+            figure=comparison_distribution_figure(
                 distance_groups=distributions,
                 mode="ECDF",
             ),
-            width="stretch",
-            config={"displaylogo": False},
+            file_stem="orthofinder_cluster_comparison_ecdf",
+            key="cluster_comparison_ecdf",
         )
     geometries: dict[str, PcoaGeometry] = {}
     for analysis in analyses:
@@ -203,10 +205,10 @@ def render_cluster_comparison(
             st.warning(f"PCoA unavailable for {analysis.key.display_label()}: {error}")
     if len(geometries) >= 2:
         render_graph_guidance(key="comparison_pcoa")
-        st.plotly_chart(
-            comparison_pcoa_figure(geometries=geometries),
-            width="stretch",
-            config={"displaylogo": False},
+        render_plotly_figure(
+            figure=comparison_pcoa_figure(geometries=geometries),
+            file_stem="orthofinder_cluster_comparison_pcoa",
+            key="cluster_comparison_pcoa",
         )
         st.caption(
             "Panels use consistent species colours but independent coordinate systems. "

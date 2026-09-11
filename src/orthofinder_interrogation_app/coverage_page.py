@@ -19,6 +19,7 @@ from .coverage_exports import (
     coverage_export_zip,
 )
 from .coverage_tree_render import coverage_tree_figure
+from .documentation_page import render_page_guidance
 from .exports import render_table_downloads
 from .focus import FocusProteinAuthority
 from .focus_page import load_focus_authority
@@ -105,6 +106,7 @@ def render_selection_coverage_tree(
     """
 
     st.header("Selection coverage tree")
+    render_page_guidance(key="selection_coverage")
     st.write(
         "Construct exact, clade, only-in and exclusion predicates against a pinned reviewed "
         "taxonomy. This is a **taxonomy/species coverage tree**—not the OrthoFinder species "
@@ -431,6 +433,7 @@ def _render_coverage_run(
     )
     for column, (label, key) in zip(metrics, labels, strict=True):
         column.metric(label, f"{summary[key]:,}")
+    files = coverage_export_files(run=run)
     event = st.plotly_chart(
         coverage_tree_figure(tree=run.tree),
         width="stretch",
@@ -438,6 +441,15 @@ def _render_coverage_run(
         key="selection_coverage_plot",
         on_select="rerun",
         selection_mode="points",
+    )
+    st.download_button(
+        "Download figure as PDF",
+        data=files["selection_coverage_tree.pdf"],
+        file_name="selection_coverage_tree.pdf",
+        mime="application/pdf",
+        key="selection_coverage_plot_pdf",
+        help="Vector PDF generated from this exact synchronised coverage-tree state.",
+        on_click="ignore",
     )
     selected_points = event.selection.points if event is not None else ()
     if selected_points and selected_points[0].get("customdata"):
@@ -531,7 +543,14 @@ def _render_coverage_run(
             "audit and cause only-in predicates to fail closed when represented in a group."
         )
         st.dataframe(run.unmapped_rows, width="stretch", hide_index=True)
-    files = coverage_export_files(run=run)
+        render_table_downloads(
+            records=run.unmapped_rows,
+            file_stem="selection_coverage_unmapped_labels",
+            key="coverage_unmapped_download",
+            tsv_label="Download unmapped labels as TSV",
+            excel_label="Download unmapped labels as formatted Excel",
+            workbook_title="OrthoFinder selection coverage unmapped labels",
+        )
     with st.expander("Reproducible selection package", expanded=False):
         st.write(
             "The ZIP contains TSV, Newick plus styles, SVG, PDF, JSON provenance and "
@@ -544,11 +563,10 @@ def _render_coverage_run(
             mime="application/zip",
             key="coverage_complete_zip",
         )
-        download_columns = st.columns(4)
+        download_columns = st.columns(3)
         for index, name in enumerate(
             (
                 "selection_coverage_tree.svg",
-                "selection_coverage_tree.pdf",
                 "selection_manifest.json",
                 "selection_coverage_tree.newick",
             )

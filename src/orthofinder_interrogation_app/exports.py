@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime
+from functools import partial
 from io import BytesIO
 from numbers import Integral, Real
 from typing import Any
@@ -22,9 +24,10 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - checked by dependency smoke tests.
     st = None  # type: ignore[assignment]
 
-EXCEL_MIME_TYPE = (
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
+EXCEL_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+PDF_MIME_TYPE = "application/pdf"
+HTML_MIME_TYPE = "text/html"
+_LOGGER = logging.getLogger("orthofinder_interrogation_app.exports")
 MAX_EXCEL_DATA_ROWS = 1_048_575
 MAX_EXCEL_COLUMNS = 16_384
 _INVALID_FILE_STEM = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -121,9 +124,7 @@ def excel_format_kind(*, column_name: str, values: Sequence[Any]) -> str:
     if _IDENTIFIER_COLUMN.search(column_name.replace("_", " ")):
         return "text"
     sample = tuple(
-        normalise_excel_scalar(value=value)
-        for value in values[:1000]
-        if value is not None
+        normalise_excel_scalar(value=value) for value in values[:1000] if value is not None
     )
     sample = tuple(value for value in sample if value is not None)
     if sample and all(isinstance(value, bool) for value in sample):
@@ -219,9 +220,7 @@ def records_to_excel_bytes(
                 f"Excel row {index} contains undeclared fields: {'; '.join(unknown)}"
             )
 
-    columns = {
-        heading: tuple(record.get(heading) for record in records) for heading in headings
-    }
+    columns = {heading: tuple(record.get(heading) for record in records) for heading in headings}
     output = BytesIO()
     workbook = xlsxwriter.Workbook(
         output,
@@ -236,9 +235,7 @@ def records_to_excel_bytes(
             "title": workbook_title,
             "subject": "Filterable export from OrthoFinder Interrogation",
             "author": "Peter Thorpe and collaborators",
-            "comments": (
-                "The Results sheet contains the exact bounded rows selected in the app."
-            ),
+            "comments": ("The Results sheet contains the exact bounded rows selected in the app."),
         }
     )
     header_format = workbook.add_format(
@@ -365,6 +362,156 @@ def render_table_downloads(
         )
 
 
+def plotly_figure_to_pdf_bytes(
+    *,
+    figure: Any,
+    width: int = 1600,
+    height: int = 1000,
+) -> bytes:
+    """Render one Plotly figure as a validated PDF byte stream.
+
+    Args:
+        figure: Plotly figure or compatible object exposing ``to_image``.
+        width: Export width in logical pixels.
+        height: Export height in logical pixels.
+
+    Returns:
+        Complete PDF bytes.
+
+    Raises:
+        InputValidationError: If dimensions, the figure or PDF renderer are invalid.
+    """
+
+    if not isinstance(width, int) or not 320 <= width <= 5000:
+        raise InputValidationError("PDF figure width must be an integer from 320 to 5000.")
+    if not isinstance(height, int) or not 240 <= height <= 5000:
+        raise InputValidationError("PDF figure height must be an integer from 240 to 5000.")
+    renderer = getattr(figure, "to_image", None)
+    if not callable(renderer):
+        raise InputValidationError("PDF export requires a Plotly-compatible figure.")
+    try:
+        payload = renderer(format="pdf", width=width, height=height, scale=1)
+    except Exception as error:
+        _LOGGER.exception("Plotly PDF generation failed")
+        raise InputValidationError(
+            "Figure PDF generation failed. Confirm that Kaleido and a compatible Chrome "
+            "or Chromium installation are available to the application."
+        ) from error
+    if not isinstance(payload, (bytes, bytearray)) or not payload.startswith(b"%PDF"):
+        raise InputValidationError("The figure renderer did not return a valid PDF payload.")
+    return bytes(payload)
+
+
+def render_plotly_figure(
+    *,
+    figure: Any,
+    file_stem: str,
+    key: str,
+    config: Mapping[str, Any] | None = None,
+    width: str | int = "stretch",
+    on_select: str = "ignore",
+    selection_mode: str | Sequence[str] = ("points", "box", "lasso"),
+    pdf_width: int = 1600,
+    pdf_height: int = 1000,
+    pdf_label: str = "Download figure as PDF",
+) -> Any:
+    """Render a Plotly figure with a deferred manuscript-ready PDF download.
+
+    Args:
+        figure: Plotly figure to display and export.
+        file_stem: Portable PDF filename without an extension.
+        key: Stable Streamlit chart key.
+        config: Optional Plotly display configuration.
+        width: Streamlit chart width.
+        on_select: Streamlit selection behaviour.
+        selection_mode: Enabled Plotly selection modes.
+        pdf_width: PDF export width in logical pixels.
+        pdf_height: PDF export height in logical pixels.
+        pdf_label: User-facing download-button label.
+
+    Returns:
+        Streamlit's chart result, including selection state when requested.
+
+    Raises:
+        ValueError: If the key is empty.
+        RuntimeError: If Streamlit is unavailable.
+    """
+
+    if not isinstance(key, str) or not key.strip():
+        raise ValueError("Figure rendering requires a non-empty key.")
+    if st is None:
+        raise RuntimeError("Streamlit is required to render figure downloads.")
+    stem = safe_file_stem(value=file_stem)
+    event = st.plotly_chart(
+        figure,
+        width=width,
+        config=dict(config or {"displaylogo": False}),
+        key=key,
+        on_select=on_select,
+        selection_mode=selection_mode,
+    )
+    st.download_button(
+        label=pdf_label,
+        data=partial(
+            plotly_figure_to_pdf_bytes,
+            figure=figure,
+            width=pdf_width,
+            height=pdf_height,
+        ),
+        file_name=f"{stem}.pdf",
+        mime=PDF_MIME_TYPE,
+        key=f"{key}_pdf",
+        help=(
+            "Generated on demand from the plotted figure. WebGL layers may be rasterised "
+            "inside the PDF; labels and other supported elements remain vector content."
+        ),
+        on_click="ignore",
+    )
+    return event
+
+
+def render_html_download(
+    *,
+    document: str,
+    file_stem: str,
+    key: str,
+    label: str = "Download interactive figure as HTML",
+) -> None:
+    """Render a self-contained HTML download for an interactive visualisation.
+
+    Args:
+        document: Complete HTML document.
+        file_stem: Portable filename without an extension.
+        key: Stable Streamlit button key.
+        label: User-facing download label.
+
+    Raises:
+        InputValidationError: If the document is empty.
+        ValueError: If the key is empty.
+        RuntimeError: If Streamlit is unavailable.
+    """
+
+    if not isinstance(document, str) or not document.strip():
+        raise InputValidationError("Interactive HTML export requires a non-empty document.")
+    if not isinstance(key, str) or not key.strip():
+        raise ValueError("Interactive HTML export requires a non-empty key.")
+    if st is None:
+        raise RuntimeError("Streamlit is required to render HTML downloads.")
+    stem = safe_file_stem(value=file_stem)
+    st.download_button(
+        label=label,
+        data=document,
+        file_name=f"{stem}.html",
+        mime=HTML_MIME_TYPE,
+        key=key,
+        help=(
+            "Retains dragging, zoom, hover labels and the current visualisation controls. "
+            "Use the static nearest-neighbour view for a PDF counterpart."
+        ),
+        on_click="ignore",
+    )
+
+
 def _validated_headings(
     *,
     records: Sequence[Mapping[str, Any]],
@@ -397,9 +544,7 @@ def _workbook_cell_formats(*, workbook: Any) -> dict[str, Any]:
         "scientific": workbook.add_format({**numeric, "num_format": "0.00E+00"}),
         "percentage": workbook.add_format({**numeric, "num_format": "0.0%"}),
         "date": workbook.add_format({**base, "num_format": "yyyy-mm-dd"}),
-        "datetime": workbook.add_format(
-            {**base, "num_format": "yyyy-mm-dd hh:mm:ss"}
-        ),
+        "datetime": workbook.add_format({**base, "num_format": "yyyy-mm-dd hh:mm:ss"}),
         "logical": workbook.add_format({**base, "align": "centre"}),
     }
 

@@ -12,7 +12,8 @@ from orthofinder_results.errors import InputValidationError, OrthoFinderResultsE
 
 from .dispersion import classical_pcoa, member_dispersion_rows, species_dispersion_rows
 from .distance_data import DistanceAnalysisProvider, GroupAnalysis
-from .exports import render_table_downloads
+from .documentation_page import render_page_guidance
+from .exports import render_html_download, render_plotly_figure, render_table_downloads
 from .figures import (
     distance_distribution_figure,
     distance_matrix_figure,
@@ -103,6 +104,7 @@ def render_evolutionary_views(
         _render_report_only(resource=resource, catalog=catalog)
         return
     st.header("Explore one cluster")
+    render_page_guidance(key="cluster_explorer")
     st.caption(
         "Inspect one group through linked views. Begin with Distance spread for compactness, "
         "then use the gene-tree phylogram and exact distance heatmap to confirm patterns."
@@ -264,6 +266,7 @@ def _render_report_only(
     """Retain the report-only API used by small integrations and fallback tests."""
 
     st.header("Evolutionary views")
+    render_page_guidance(key="cluster_explorer")
     if resource.report_path is None:
         st.warning("This resource has no embedded offline visual report.")
         return
@@ -545,6 +548,11 @@ def _render_force_network(
         return
     render_graph_guidance(key="interactive_network")
     st.iframe(document, height=760)
+    render_html_download(
+        document=document,
+        file_stem="orthofinder_interactive_nearest_neighbour_network",
+        key="interactive_nearest_neighbour_html",
+    )
     metrics = _required_mapping(entry=entry, key="networkMetrics")
     st.caption(
         f"Drag, zoom and pin nodes interactively. Solid edges retain up to "
@@ -587,24 +595,28 @@ def _render_dispersion(
             """
         )
     render_graph_guidance(key="distance_distribution")
-    st.plotly_chart(
-        distance_distribution_figure(rows=analysis.distances),
-        width="stretch",
-        config={"displaylogo": False},
+    token = _state_token(key=analysis.key)
+    render_plotly_figure(
+        figure=distance_distribution_figure(rows=analysis.distances),
+        file_stem=f"{analysis.key.group_id}_distance_distributions",
+        key=f"distance_distribution_{token}",
     )
     render_graph_guidance(key="member_dispersion")
-    st.plotly_chart(
-        member_dispersion_figure(rows=member_rows, selected_members=linked),
-        width="stretch",
-        config={"displaylogo": False},
+    render_plotly_figure(
+        figure=member_dispersion_figure(rows=member_rows, selected_members=linked),
+        file_stem=f"{analysis.key.group_id}_member_dispersion",
+        key=f"member_dispersion_figure_{token}",
     )
     secondary = st.tabs(("Distance from sample medoid", "Species-pair heatmap", "Data tables"))
     with secondary[0]:
         render_graph_guidance(key="medoid_distance")
-        st.plotly_chart(
-            medoid_distance_figure(rows=analysis.distances, member_rows=member_rows),
-            width="stretch",
-            config={"displaylogo": False},
+        render_plotly_figure(
+            figure=medoid_distance_figure(
+                rows=analysis.distances,
+                member_rows=member_rows,
+            ),
+            file_stem=f"{analysis.key.group_id}_distance_from_medoid",
+            key=f"medoid_distance_figure_{token}",
         )
         st.caption(
             "The medoid minimises mean distance only within the displayed exact or "
@@ -612,10 +624,10 @@ def _render_dispersion(
         )
     with secondary[1]:
         render_graph_guidance(key="species_pair_heatmap")
-        st.plotly_chart(
-            species_pair_heatmap_figure(rows=analysis.distances),
-            width="stretch",
-            config={"displaylogo": False},
+        render_plotly_figure(
+            figure=species_pair_heatmap_figure(rows=analysis.distances),
+            file_stem=f"{analysis.key.group_id}_species_pair_heatmap",
+            key=f"species_pair_heatmap_{token}",
         )
     with secondary[2]:
         species_rows = species_dispersion_rows(rows=analysis.distances)
@@ -726,10 +738,11 @@ def _render_enhanced_pcoa(
     )
     with views[0]:
         render_graph_guidance(key="pcoa_3d")
-        st.plotly_chart(
-            pcoa_3d_figure(geometry=geometry, selected_members=linked),
-            width="stretch",
-            config={"displaylogo": False},
+        render_plotly_figure(
+            figure=pcoa_3d_figure(geometry=geometry, selected_members=linked),
+            file_stem="orthofinder_cluster_pcoa_3d",
+            key="cluster_pcoa_3d",
+            pdf_height=1200,
         )
     with views[1]:
         axis_controls = st.columns(2)
@@ -751,15 +764,15 @@ def _render_enhanced_pcoa(
             )
         )
         render_graph_guidance(key="pcoa_axes")
-        st.plotly_chart(
-            pcoa_axis_figure(
+        render_plotly_figure(
+            figure=pcoa_axis_figure(
                 geometry=geometry,
                 horizontal_axis=horizontal,
                 vertical_axis=vertical,
                 selected_members=linked,
             ),
-            width="stretch",
-            config={"displaylogo": False},
+            file_stem=f"orthofinder_cluster_pcoa_axes_{horizontal}_{vertical}",
+            key="cluster_pcoa_selected_axes",
         )
     with views[2]:
         _render_pcoa(entry=entry, linked=linked)
@@ -1157,10 +1170,10 @@ def _render_pcoa(*, entry: dict[str, Any], linked: frozenset[str]) -> None:
     else:
         st.success(explanation)
     render_graph_guidance(key="pcoa_2d")
-    st.plotly_chart(
-        pcoa_figure(entry=entry, selected_members=linked),
-        width="stretch",
-        config={"displaylogo": False},
+    render_plotly_figure(
+        figure=pcoa_figure(entry=entry, selected_members=linked),
+        file_stem="orthofinder_cluster_pcoa_2d",
+        key="cluster_pcoa_2d",
     )
 
 
@@ -1178,7 +1191,11 @@ def _render_shepard(*, entry: dict[str, Any]) -> None:
         "scatter or systematic curvature reveals where the PCoA view distorts them."
     )
     render_graph_guidance(key="shepard")
-    st.plotly_chart(figure, width="stretch", config={"displaylogo": False})
+    render_plotly_figure(
+        figure=figure,
+        file_stem="orthofinder_cluster_pcoa_shepard",
+        key="cluster_pcoa_shepard",
+    )
     st.caption(
         f"Deterministic {int(projection.get('shepard_point_count', 0)):,}-point summary "
         f"across {int(projection.get('shepard_total_pair_count', 0)):,} exact input pairs."
@@ -1208,7 +1225,12 @@ def _render_phylogram(*, entry: dict[str, Any], linked: frozenset[str]) -> None:
         st.warning(str(error))
         return
     render_graph_guidance(key="phylogram")
-    st.plotly_chart(figure, width="stretch", config={"displaylogo": False})
+    render_plotly_figure(
+        figure=figure,
+        file_stem="orthofinder_cluster_gene_tree_phylogram",
+        key="cluster_gene_tree_phylogram",
+        pdf_height=1400,
+    )
     authority = tree.get("treeAuthority", "RESOLVED_GENE_TREE")
     st.caption(
         f"{tree.get('status', 'Unavailable')} · {authority} "
@@ -1241,7 +1263,12 @@ def _render_matrix(*, entry: dict[str, Any], linked: frozenset[str]) -> None:
         st.warning(str(error))
         return
     render_graph_guidance(key="distance_heatmap")
-    st.plotly_chart(figure, width="stretch", config={"displaylogo": False})
+    render_plotly_figure(
+        figure=figure,
+        file_stem="orthofinder_cluster_exact_distance_heatmap",
+        key="cluster_exact_distance_heatmap",
+        pdf_height=1400,
+    )
     matrix = _required_mapping(entry=entry, key="distanceMatrix")
     st.caption(
         f"{matrix.get('status', 'Unavailable')} · order: "
@@ -1269,7 +1296,11 @@ def _render_topology(
         st.warning(str(error))
         return
     render_graph_guidance(key="nearest_neighbour")
-    st.plotly_chart(figure, width="stretch", config={"displaylogo": False})
+    render_plotly_figure(
+        figure=figure,
+        file_stem="orthofinder_cluster_nearest_neighbour_topology",
+        key="cluster_nearest_neighbour_topology",
+    )
     st.caption(
         f"Solid edges retain up to {nearest_neighbours:,} neighbours. Static layout "
         "spacing remains non-quantitative."

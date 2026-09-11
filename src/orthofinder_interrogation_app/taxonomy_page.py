@@ -10,6 +10,7 @@ import streamlit as st
 
 from orthofinder_results.errors import InputValidationError
 
+from .documentation_page import render_page_guidance
 from .evolutionary_page import (
     _comparison_keys,
     _store_active_group,
@@ -72,6 +73,7 @@ def render_taxonomy_search(*, service: OrthoFinderQueryService, taxonomy_path_te
     """Render mapping audit, target selection and four taxonomic searches."""
 
     st.header("Taxonomic search")
+    render_page_guidance(key="taxonomic_search")
     st.caption(
         "Find groups that contain, favour or are restricted to descendants of a reviewed "
         "taxon. The mapping is generated from the current dataset and is never fixed to one "
@@ -382,6 +384,15 @@ def _render_mapping_audit(*, authority: TaxonomyAuthority) -> None:
             expanded=True,
         ):
             st.dataframe(unresolved, width="stretch", hide_index=True)
+            render_table_downloads(
+                records=unresolved,
+                file_stem="orthofinder_unresolved_taxonomy_mappings",
+                key="taxonomy_unresolved_mapping_download",
+                tsv_label="Download unresolved mappings as TSV",
+                excel_label="Download unresolved mappings as formatted Excel",
+                column_definitions=TAXONOMY_TEMPLATE_HELP,
+                workbook_title="Unresolved OrthoFinder taxonomy mappings",
+            )
     with st.expander(f"Complete taxonomy mapping audit ({len(audit):,})", expanded=False):
         st.dataframe(audit, width="stretch", hide_index=True)
         render_table_downloads(

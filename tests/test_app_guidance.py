@@ -53,6 +53,8 @@ def test_graph_registry_is_complete_and_plain_language() -> None:
         assert record.title
         assert len(record.shows) >= 40
         assert len(record.interpretation) >= 40
+        assert len(record.patterns) >= 40
+        assert len(record.confirmation) >= 40
         assert len(record.limitation) >= 40
         assert guidance.graph_guidance(key=key) is record
     with pytest.raises(InputValidationError, match="Unknown graph"):
@@ -71,6 +73,8 @@ def test_render_graph_guidance_has_required_sections(
     rendered = fake.markdown_values[0]
     assert "What this graph shows" in rendered
     assert "How to interpret it" in rendered
+    assert "What common result patterns mean" in rendered
+    assert "What to check next" in rendered
     assert "Important limitation" in rendered
     monkeypatch.setattr(guidance, "st", None)
     with pytest.raises(RuntimeError, match="Streamlit"):
@@ -87,7 +91,7 @@ def test_every_rendered_graph_has_a_guidance_panel() -> None:
         source_root / "orthofinder_interrogation_app" / "benchmark_page.py",
     )
     source = "\n".join(path.read_text(encoding="utf-8") for path in files)
-    graph_count = source.count("st.plotly_chart(") + source.count("st.iframe(")
+    graph_count = source.count("render_plotly_figure(") + source.count("st.iframe(")
     guidance_count = source.count("render_graph_guidance(key=")
     assert graph_count == 22
     assert guidance_count == graph_count

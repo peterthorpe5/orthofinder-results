@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+## 0.9.2 - 2026-09-11
+
+- Add a result-led **How to read this page** dropdown to every analytical workflow,
+  separating purpose, result meaning, recommended reading order and the qualification
+  that must accompany interpretation.
+- Expand all 21 graph-guidance dropdowns with common result patterns and the exact
+  quantitative table, matrix, tree or diagnostic that should be checked next.
+- Add a dedicated **Methods & provenance** page covering 13 stages from the completed
+  OrthoFinder run through version-aware import, portable trees, bounded patristic
+  distances, calibrated statistics, visualisation and immutable publication.
+- Add a searchable, topic-filtered glossary containing more than 100 biological,
+  phylogenetic, statistical, visualisation and data-contract terms, with paired TSV
+  and formatted-Excel downloads.
+- Add a deferred PDF download beside every Plotly result figure, retain the direct
+  vector PDF for the selection coverage tree, and add a self-contained HTML download
+  for the draggable network beside its static PDF counterpart.
+- Ensure every visible result table, including overview, classification-count,
+  filtered-contrast, per-background and unresolved-label tables, has matching TSV and
+  formatted-Excel exports of the exact displayed rows.
+- Retain resource schema 4 and all stored calculations unchanged: this is a compatible
+  viewer and documentation update and requires no Slurm rerun or resource transfer.
+
 ## 0.9.1 - 2026-09-10
 
 - Reorganise the calibrated-dispersion page around **Results at a glance**,
