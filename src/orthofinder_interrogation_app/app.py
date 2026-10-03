@@ -34,6 +34,7 @@ from orthofinder_interrogation_app.launcher import (
     LOG_ENVIRONMENT_VARIABLE,
     RESOURCE_ENVIRONMENT_VARIABLE,
     TAXONOMY_ENVIRONMENT_VARIABLE,
+    TERMINAL_MOTIF_ENVIRONMENT_VARIABLE,
 )
 from orthofinder_interrogation_app.models import GroupKey, GroupSearchFilters
 from orthofinder_interrogation_app.protein_page import render_protein_search
@@ -43,6 +44,7 @@ from orthofinder_interrogation_app.queries import (
 )
 from orthofinder_interrogation_app.resource import open_resource
 from orthofinder_interrogation_app.taxonomy_page import render_taxonomy_search
+from orthofinder_interrogation_app.terminal_motif_page import render_terminal_motif_page
 from orthofinder_results import __version__
 from orthofinder_results.errors import OrthoFinderResultsError
 from orthofinder_results.io_utils import configure_logging
@@ -59,6 +61,7 @@ _PAGES = (
     "All distance results",
     "Taxonomic search",
     "Selection coverage tree",
+    "C-terminal motif conservation",
     "Offline report",
     "Methods",
     "Glossary",
@@ -75,6 +78,7 @@ _PAGE_LABELS = {
     "All distance results": "All distance results",
     "Taxonomic search": "Taxonomic search",
     "Selection coverage tree": "Selection coverage tree",
+    "C-terminal motif conservation": "C-terminal motif conservation",
     "Offline report": "Download report",
     "Methods": "Methods & provenance",
     "Glossary": "Glossary",
@@ -219,7 +223,7 @@ def main() -> None:
         st.info("Provide a completed resource path in the sidebar to begin.")
         return
     try:
-        resource = open_resource(path=Path(resource_text))
+        resource = _open_resource_cached(path_text=resource_text.strip())
         service = OrthoFinderQueryService(resource=resource)
         cache_dir = Path(cache_text)
         _render_resource_identity(resource=resource)
@@ -267,6 +271,13 @@ def main() -> None:
                 taxonomy_path_text=taxonomy_path_text,
                 expected_path_text=expected_path_text,
                 focus_path_text=focus_path_text,
+            )
+        elif page_name == "C-terminal motif conservation":
+            render_terminal_motif_page(
+                resource=resource,
+                sidecar_path_text=os.environ.get(
+                    TERMINAL_MOTIF_ENVIRONMENT_VARIABLE, ""
+                ),
             )
         elif page_name == "Offline report":
             _render_offline_report(resource=resource)
@@ -318,6 +329,13 @@ def _configure_application_logging() -> None:
 
     log_text = os.environ.get(LOG_ENVIRONMENT_VARIABLE, "").strip()
     configure_logging(log_path=Path(log_text) if log_text else None, verbose=False)
+
+
+@st.cache_resource(show_spinner=False)
+def _open_resource_cached(*, path_text: str) -> Any:
+    """Validate one immutable completed resource once per app process."""
+
+    return open_resource(path=Path(path_text))
 
 
 def _render_resource_identity(*, resource: Any) -> None:

@@ -25,6 +25,7 @@ TAXONOMY_ENVIRONMENT_VARIABLE = "ORTHOFINDER_RESULTS_TAXONOMY"
 EXPECTED_TAXA_ENVIRONMENT_VARIABLE = "ORTHOFINDER_RESULTS_EXPECTED_TAXA"
 FOCUS_ENVIRONMENT_VARIABLE = "ORTHOFINDER_RESULTS_FOCUS_PROTEINS"
 CACHE_ENVIRONMENT_VARIABLE = "ORTHOFINDER_RESULTS_CACHE"
+TERMINAL_MOTIF_ENVIRONMENT_VARIABLE = "ORTHOFINDER_RESULTS_TERMINAL_MOTIF_PARQUET"
 DEFAULT_PORT = 8501
 MAX_AUTOMATIC_PORT_ATTEMPTS = 100
 
@@ -81,6 +82,11 @@ def build_parser() -> argparse.ArgumentParser:
             "Persistent sidecar cache for on-demand analyses. Defaults to the macOS "
             "Library cache or the Linux/XDG user cache; /tmp is never assumed."
         ),
+    )
+    parser.add_argument(
+        "--terminal-motif-parquet",
+        type=Path,
+        help="Complete-proteome sequence Parquet for C-terminal motif conservation.",
     )
     parser.add_argument(
         "--headless",
@@ -149,6 +155,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             _LOGGER.error("Focus protein authority is not a file: %s", focus_path)
             return 2
         environment[FOCUS_ENVIRONMENT_VARIABLE] = str(focus_path)
+    if arguments.terminal_motif_parquet is not None:
+        from .terminal_motif import validate_sequence_sidecar
+
+        try:
+            motif_path = validate_sequence_sidecar(path=arguments.terminal_motif_parquet)
+        except OrthoFinderResultsError as error:
+            _LOGGER.error("Terminal-motif sequence resource is invalid: %s", error)
+            return 2
+        environment[TERMINAL_MOTIF_ENVIRONMENT_VARIABLE] = str(motif_path)
     app_path = Path(__file__).with_name("app.py").resolve()
     command = [
         sys.executable,

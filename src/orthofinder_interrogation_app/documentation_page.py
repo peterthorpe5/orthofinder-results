@@ -51,6 +51,25 @@ class MethodStep:
 
 
 PAGE_GUIDANCE = {
+    "terminal_motif": PageGuidance(
+        title="C-terminal motif conservation",
+        purpose=(
+            "Identifies HOGs whose sequence-bearing proteins share an exact user-defined "
+            "C-terminal amino-acid motif across multiple species."
+        ),
+        results=(
+            "Each result reports protein-level matching fraction, represented-species "
+            "breadth and the species containing at least one matching protein."
+        ),
+        read_order=(
+            "Set the exact motif and conservation threshold, require focal species if "
+            "needed, inspect upper-right HOGs in the plot, then verify every protein call."
+        ),
+        caution=(
+            "A conserved terminus and HOG membership are candidate evidence only. They do "
+            "not demonstrate Cereblon binding, ubiquitination, altered abundance or degradation."
+        ),
+    ),
     "overview": PageGuidance(
         title="Dataset summary",
         purpose=(
@@ -303,6 +322,28 @@ PAGE_GUIDANCE = {
 
 
 GLOSSARY_ENTRIES = (
+    GlossaryEntry(
+        "C-terminal motif",
+        "Groups and proteins",
+        "An exact amino-acid sequence at the carboxyl end of a protein.",
+        "A match is a sequence observation, not proof of Cereblon recognition or degradation.",
+        "Terminal asparagine; motif matching fraction; sequence sidecar",
+    ),
+    GlossaryEntry(
+        "Motif matching fraction",
+        "Groups and proteins",
+        "The proportion of sequence-bearing proteins in a HOG ending with the exact motif.",
+        "Read it with represented and matching species because paralogue expansions can dominate.",
+        "C-terminal motif; matching species; HOG",
+    ),
+    GlossaryEntry(
+        "Sequence sidecar",
+        "Data and provenance",
+        "A compressed Parquet companion containing reconciled complete-proteome sequences.",
+        "It is built from the same OrthoFinder identifiers and FASTA files without "
+        "altering the resource.",
+        "SequenceIDs.txt; immutable resource; C-terminal motif",
+    ),
     GlossaryEntry(
         "Analysis cache",
         "Data and provenance",
@@ -1263,6 +1304,21 @@ METHOD_STEPS = (
     ),
     MethodStep(
         13,
+        "Complete-proteome terminal-motif authority",
+        (
+            "The optional sequence-sidecar builder reconciles SequenceIDs.txt against every "
+            "Species*.fa record from the same completed OrthoFinder run and stores each full "
+            "protein sequence once in compressed Parquet. The viewer joins these sequences to "
+            "HOG membership and tests exact user-defined C-terminal suffixes."
+        ),
+        "A separate one-sequence-per-protein authority supports flexible motifs without "
+        "duplicating sequences across HOG hierarchy levels or rebuilding the formal resource.",
+        "Atomic sequence Parquet, protein-level calls, HOG conservation summaries and exports.",
+        "Terminal conservation prioritises candidates; Cereblon recognition and degradation "
+        "must be established experimentally.",
+    ),
+    MethodStep(
+        14,
         "Immutable publication and read-only interrogation",
         (
             "The pipeline published compressed TSV, typed Parquet, DuckDB, manifest, QC "

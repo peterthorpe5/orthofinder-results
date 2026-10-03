@@ -243,7 +243,12 @@ That tab shows the exact E3, housekeeping or R/NLR markers used, their matched
 proteins and clusters, every member of a selected cluster, and paired TSV or
 formatted-Excel downloads. It does not require a new cluster run or DuckDB transfer.
 
-Version 0.9.2 is another schema-compatible viewer update. Every analytical page now
+Version 0.10.0 adds schema-compatible, complete-proteome C-terminal motif discovery.
+The dedicated page defaults to terminal asparagine and an 80% matching threshold,
+while accepting any exact canonical amino-acid suffix, required focal species and
+minimum species breadth. A compact sequence Parquet is built once from the same
+OrthoFinder `SequenceIDs.txt` and `Species*.fa` authorities; the completed schema-4
+resource is not rebuilt or modified. Every analytical page now
 has a result-led interpretation dropdown, and each graph explanation includes common
 result patterns plus the quantitative view that should be checked next. Dedicated
 **Methods & provenance** and searchable **Glossary** pages explain the complete route
@@ -269,6 +274,27 @@ branch-length phylogram without rebuilding the completed resource.
 orthofinder-interrogation-app \
   --resource-dir /path/to/completed/resource
 ```
+
+For complete-proteome C-terminal motif discovery, build one compressed sequence
+sidecar from the same completed OrthoFinder run. This does not rerun OrthoFinder,
+the dispersion benchmark or the 1.5-GiB resource build:
+
+```bash
+orthofinder-terminal-motif-build \
+  --orthofinder-results-dir /path/to/Results_Feb26 \
+  --output-parquet /path/to/terminal_motif_sequences.parquet
+
+orthofinder-interrogation-app \
+  --resource-dir /path/to/completed/resource \
+  --terminal-motif-parquet /path/to/terminal_motif_sequences.parquet
+```
+
+The builder fails closed unless every `SequenceIDs.txt` record reconciles with
+exactly one protein in the run's `WorkingDirectory/Species*.fa` files. The app
+defaults to motif `N`, an 80% protein-level threshold and root HOGs at `N0`, but
+accepts any canonical suffix up to 100 residues, minimum species breadth and
+required focal species. Results include paired TSV/Excel tables, plot PDF and
+selected-HOG FASTA.
 
 The launcher validates the manifest, schema, run identity and required DuckDB
 relations before starting a local Streamlit server. Every database query is

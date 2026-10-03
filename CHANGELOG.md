@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.10.0 - 2026-10-03
+
+- Add a dedicated **C-terminal motif conservation** page for the Cereblon pilot-data
+  hypothesis and general exact terminal-sequence discovery.
+- Default to terminal asparagine (`N`) and an 80% protein-level threshold while allowing
+  any canonical amino-acid suffix up to 100 residues, required focal species and minimum
+  phylogenetic breadth.
+- Add a one-time `orthofinder-terminal-motif-build` command that reconciles the complete
+  OrthoFinder `SequenceIDs.txt` authority with its `Species*.fa` files and atomically
+  publishes a compressed Parquet sidecar without rebuilding the completed schema-4 resource.
+- Provide an interactive protein-conservation versus species-breadth plot, PDF export,
+  exact HOG and protein tables as TSV and formatted Excel, and selected-HOG FASTA export.
+- Cache immutable resource validation once per Streamlit process so widget reruns no longer
+  repeat DuckDB schema and manifest inspection.
+- State explicitly that conserved termini are candidates for testing and do not demonstrate
+  Cereblon binding, ubiquitination or degradation.
+
 ## 0.9.2 - 2026-09-11
 
 - Add a result-led **How to read this page** dropdown to every analytical workflow,

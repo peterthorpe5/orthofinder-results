@@ -52,7 +52,7 @@ class _FakeStreamlit:
 def test_page_guidance_registry_is_complete_and_result_led() -> None:
     """Every analytical and documentation page has substantive interpretation help."""
 
-    assert len(documentation_page.PAGE_GUIDANCE) == 13
+    assert len(documentation_page.PAGE_GUIDANCE) == 14
     for key, record in documentation_page.PAGE_GUIDANCE.items():
         assert key
         assert len(record.title) >= 5
@@ -128,7 +128,7 @@ def test_method_steps_are_ordered_complete_and_defensive() -> None:
     """The method table follows the full workflow and rejects ambiguous ordering."""
 
     records = documentation_page.method_records()
-    assert [record["Step"] for record in records] == list(range(1, 14))
+    assert [record["Step"] for record in records] == list(range(1, 15))
     assert records[0]["Stage"] == "Completed OrthoFinder analysis"
     assert records[-1]["Stage"] == "Immutable publication and read-only interrogation"
     assert all(record["Important qualification"] for record in records)

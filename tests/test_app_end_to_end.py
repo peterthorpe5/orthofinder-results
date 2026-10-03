@@ -6,6 +6,8 @@ import copy
 import json
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from streamlit.testing.v1 import AppTest
 
@@ -20,6 +22,7 @@ from orthofinder_interrogation_app.launcher import (
     FOCUS_ENVIRONMENT_VARIABLE,
     RESOURCE_ENVIRONMENT_VARIABLE,
     TAXONOMY_ENVIRONMENT_VARIABLE,
+    TERMINAL_MOTIF_ENVIRONMENT_VARIABLE,
 )
 from orthofinder_interrogation_app.report_data import load_visualisation_catalog
 from orthofinder_interrogation_app.resource import open_resource
@@ -153,6 +156,66 @@ def test_dispersion_benchmark_route_explains_older_resources(
     assert not test.exception
     assert any(header.value == "Calibrated dispersion results" for header in test.header)
     assert any("predates matched-background" in item.value for item in test.info)
+
+
+def test_terminal_motif_route_explains_missing_sequence_sidecar(
+    application_resource: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The motif page gives an actionable safe state before its sidecar is configured."""
+
+    test = _application_test(
+        application_resource=application_resource,
+        monkeypatch=monkeypatch,
+    )
+    test.sidebar.radio[0].set_value("C-terminal motif conservation")
+    test.run()
+    assert not test.exception
+    assert any(header.value == "C-terminal motif conservation" for header in test.header)
+    assert any("complete-proteome sequence sidecar" in item.value for item in test.info)
+    assert any("orthofinder-terminal-motif-build" in item.value for item in test.code)
+
+
+def test_terminal_motif_route_renders_complete_results_and_downloads(
+    application_resource: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The configured sequence authority renders plot, HOG calls and protein exports."""
+
+    sidecar = tmp_path / "terminal_sequences.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "internal_id": "0_0", "species_label": "Species_A",
+                    "member_id": "alpha_1", "sequence": "MAAN",
+                },
+                {
+                    "internal_id": "0_1", "species_label": "Species_A",
+                    "member_id": "alpha_2", "sequence": "MQQN",
+                },
+                {
+                    "internal_id": "1_0", "species_label": "Species_B",
+                    "member_id": "beta_1", "sequence": "MTTN",
+                },
+            ]
+        ),
+        sidecar,
+        compression="zstd",
+    )
+    monkeypatch.setenv(TERMINAL_MOTIF_ENVIRONMENT_VARIABLE, str(sidecar))
+    test = _application_test(
+        application_resource=application_resource,
+        monkeypatch=monkeypatch,
+    )
+    test.sidebar.radio[0].set_value("C-terminal motif conservation")
+    test.run()
+    assert not test.exception
+    assert any(subheader.value == "Conservation landscape" for subheader in test.subheader)
+    assert any(metric.label == "Passing HOGs" and metric.value == "1" for metric in test.metric)
+    assert len(test.dataframe) >= 2
+    assert len(test.get("download_button")) >= 6
 
 
 def test_dispersion_benchmark_route_renders_complete_inference(
