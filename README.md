@@ -244,6 +244,9 @@ proteins and clusters, every member of a selected cluster, and paired TSV or
 formatted-Excel downloads. It does not require a new cluster run or DuckDB transfer.
 
 Version 0.10.0 adds schema-compatible, complete-proteome C-terminal motif discovery.
+Version 0.10.1 adds reviewed lineage-level filtering and a species-by-species taxonomic
+distribution for each candidate HOG. The motif page intentionally remains in a clearly
+labelled setup state until the sequence sidecar is supplied.
 The dedicated page defaults to terminal asparagine and an 80% matching threshold,
 while accepting any exact canonical amino-acid suffix, required focal species and
 minimum species breadth. A compact sequence Parquet is built once from the same

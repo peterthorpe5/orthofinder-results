@@ -59,11 +59,13 @@ PAGE_GUIDANCE = {
         ),
         results=(
             "Each result reports protein-level matching fraction, represented-species "
-            "breadth and the species containing at least one matching protein."
+            "breadth, reviewed focal-lineage coverage and the species containing at least "
+            "one matching protein."
         ),
         read_order=(
-            "Set the exact motif and conservation threshold, require focal species if "
-            "needed, inspect upper-right HOGs in the plot, then verify every protein call."
+            "First load the sequence sidecar. Set the exact motif, choose a reviewed focal "
+            "lineage and any required comparison lineages, inspect passing HOGs, then verify "
+            "the species and protein-level calls."
         ),
         caution=(
             "A conserved terminus and HOG membership are candidate evidence only. They do "
@@ -335,6 +337,14 @@ GLOSSARY_ENTRIES = (
         "The proportion of sequence-bearing proteins in a HOG ending with the exact motif.",
         "Read it with represented and matching species because paralogue expansions can dominate.",
         "C-terminal motif; matching species; HOG",
+    ),
+    GlossaryEntry(
+        "Focal-lineage motif coverage",
+        "Taxonomy and coverage",
+        "The proportion of represented reviewed descendants in the selected lineage that "
+        "contain at least one protein ending with the exact motif.",
+        "The denominator is represented sampled descendants, not every species known to science.",
+        "C-terminal motif; reviewed taxonomy; matching species",
     ),
     GlossaryEntry(
         "Sequence sidecar",
@@ -1309,11 +1319,13 @@ METHOD_STEPS = (
             "The optional sequence-sidecar builder reconciles SequenceIDs.txt against every "
             "Species*.fa record from the same completed OrthoFinder run and stores each full "
             "protein sequence once in compressed Parquet. The viewer joins these sequences to "
-            "HOG membership and tests exact user-defined C-terminal suffixes."
+            "HOG membership, tests exact user-defined C-terminal suffixes and intersects the "
+            "observed species with the reviewed taxonomy authority."
         ),
         "A separate one-sequence-per-protein authority supports flexible motifs without "
         "duplicating sequences across HOG hierarchy levels or rebuilding the formal resource.",
-        "Atomic sequence Parquet, protein-level calls, HOG conservation summaries and exports.",
+        "Atomic sequence Parquet, protein-level calls, lineage-aware HOG conservation "
+        "summaries and exports.",
         "Terminal conservation prioritises candidates; Cereblon recognition and degradation "
         "must be established experimentally.",
     ),

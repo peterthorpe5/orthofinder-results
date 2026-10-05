@@ -9,6 +9,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from orthofinder_interrogation_app.resource import open_resource
+from orthofinder_interrogation_app.taxonomy import TaxonomyAuthority, TaxonomyRecord
 from orthofinder_interrogation_app.terminal_motif import (
     motif_group_members,
     motif_group_summary,
@@ -17,6 +18,11 @@ from orthofinder_interrogation_app.terminal_motif import (
     validate_sequence_sidecar,
 )
 from orthofinder_interrogation_app.terminal_motif_cli import build_sequence_sidecar, main
+from orthofinder_interrogation_app.terminal_motif_page import (
+    _apply_taxonomy_filters,
+    _load_taxonomy,
+    _species_distribution,
+)
 from orthofinder_results.errors import InputValidationError
 
 
@@ -27,16 +33,22 @@ def _write_sidecar(*, path: Path) -> Path:
         pa.Table.from_pylist(
             [
                 {
-                    "internal_id": "0_0", "species_label": "Species_A",
-                    "member_id": "alpha_1", "sequence": "MAAN",
+                    "internal_id": "0_0",
+                    "species_label": "Species_A",
+                    "member_id": "alpha_1",
+                    "sequence": "MAAN",
                 },
                 {
-                    "internal_id": "0_1", "species_label": "Species_A",
-                    "member_id": "alpha_2", "sequence": "MQQN",
+                    "internal_id": "0_1",
+                    "species_label": "Species_A",
+                    "member_id": "alpha_2",
+                    "sequence": "MQQN",
                 },
                 {
-                    "internal_id": "1_0", "species_label": "Species_B",
-                    "member_id": "beta_1", "sequence": "MTTN",
+                    "internal_id": "1_0",
+                    "species_label": "Species_B",
+                    "member_id": "beta_1",
+                    "sequence": "MTTN",
                 },
             ]
         ),
@@ -87,6 +99,7 @@ def test_motif_queries_return_exact_hog_and_members(
     )
     assert rows[0]["group_id"] == "N0.HOG1"
     assert rows[0]["matching_fraction"] == 1.0
+    assert rows[0]["represented_species"] == "Species_A; Species_B"
     members = motif_group_members(
         resource=resource,
         sidecar_path=sidecar,
@@ -114,21 +127,22 @@ def test_sequence_sidecar_builder_and_cli(orthofinder2_results: Path, tmp_path: 
     """The builder reconciles complete internal FASTA identifiers atomically."""
 
     working = orthofinder2_results / "WorkingDirectory"
-    (working / "Species0.fa").write_text(
-        ">0_0\nMAAN\n>0_1\nMQQN\n", encoding="utf-8"
-    )
+    (working / "Species0.fa").write_text(">0_0\nMAAN\n>0_1\nMQQN\n", encoding="utf-8")
     (working / "Species1.fa").write_text(">1_0\nMTTA\n", encoding="utf-8")
     output = tmp_path / "terminal.parquet"
-    assert build_sequence_sidecar(
-        results_dir=orthofinder2_results, output_path=output
-    ) == 3
+    assert build_sequence_sidecar(results_dir=orthofinder2_results, output_path=output) == 3
     assert motif_species(sidecar_path=output) == ("Species_A", "Species_B")
-    assert main(
-        [
-            "--orthofinder-results-dir", str(orthofinder2_results),
-            "--output-parquet", str(tmp_path / "cli.parquet"),
-        ]
-    ) == 0
+    assert (
+        main(
+            [
+                "--orthofinder-results-dir",
+                str(orthofinder2_results),
+                "--output-parquet",
+                str(tmp_path / "cli.parquet"),
+            ]
+        )
+        == 0
+    )
     with pytest.raises(InputValidationError, match="must end in .parquet"):
         build_sequence_sidecar(
             results_dir=orthofinder2_results,
@@ -136,9 +150,128 @@ def test_sequence_sidecar_builder_and_cli(orthofinder2_results: Path, tmp_path: 
         )
 
 
-def test_builder_rejects_partial_reconciliation(
-    orthofinder2_results: Path, tmp_path: Path
-) -> None:
+def test_taxonomic_hog_filter_uses_reviewed_descendants() -> None:
+    """Lineage coverage and required/excluded clades operate on reviewed labels."""
+
+    def record(label: str, taxon_id: int, lineage: tuple[int, ...]) -> TaxonomyRecord:
+        return TaxonomyRecord(
+            workflow_species_label=label,
+            source_species_name=label,
+            accepted_species_name=label,
+            ncbi_taxon_id=taxon_id,
+            parent_taxon_id=lineage[-1],
+            parent_taxon_name="parent",
+            lineage_taxon_ids=lineage,
+            lineage_names=tuple(f"Taxon {value}" for value in lineage),
+            mapping_status="REVIEWED",
+            mapping_method="manual",
+            mapping_source="test",
+            source_date="2026-10-03",
+            source_version="test",
+            reviewed_by="tester",
+            reviewed_at_utc="2026-10-03T00:00:00Z",
+            review_note="test",
+        )
+
+    authority = TaxonomyAuthority(
+        records=(
+            record("Arabidopsis", 3702, (1, 33090, 71240)),
+            record("Rice", 4530, (1, 33090, 4447)),
+            record("Human", 9606, (1, 33208, 9605)),
+        ),
+        expected_species=("Arabidopsis", "Rice", "Human"),
+    )
+    rows = (
+        {
+            "group_id": "N0.HOG1",
+            "represented_species": "Arabidopsis; Human; Rice",
+            "matching_species": "Arabidopsis; Human",
+        },
+    )
+    filtered = _apply_taxonomy_filters(
+        rows=rows,
+        authority=authority,
+        focal_taxon_id=33090,
+        minimum_lineage_fraction=0.5,
+        required_taxon_ids=(9605,),
+        excluded_taxon_ids=(),
+    )
+    assert filtered[0]["focal_represented_species"] == 2
+    assert filtered[0]["focal_matching_species"] == 1
+    assert filtered[0]["focal_matching_fraction"] == 0.5
+    assert not _apply_taxonomy_filters(
+        rows=rows,
+        authority=authority,
+        focal_taxon_id=33090,
+        minimum_lineage_fraction=0.8,
+        required_taxon_ids=(),
+        excluded_taxon_ids=(),
+    )
+    assert not _apply_taxonomy_filters(
+        rows=rows,
+        authority=authority,
+        focal_taxon_id=None,
+        minimum_lineage_fraction=0.0,
+        required_taxon_ids=(),
+        excluded_taxon_ids=(9605,),
+    )
+    assert (
+        _apply_taxonomy_filters(
+            rows=rows,
+            authority=None,
+            focal_taxon_id=None,
+            minimum_lineage_fraction=0.0,
+            required_taxon_ids=(),
+            excluded_taxon_ids=(),
+        )
+        == rows
+    )
+    assert not _apply_taxonomy_filters(
+        rows=rows,
+        authority=authority,
+        focal_taxon_id=33090,
+        minimum_lineage_fraction=0.0,
+        required_taxon_ids=(4447,),
+        excluded_taxon_ids=(),
+    )
+    assert not _apply_taxonomy_filters(
+        rows=rows,
+        authority=authority,
+        focal_taxon_id=999999,
+        minimum_lineage_fraction=0.0,
+        required_taxon_ids=(),
+        excluded_taxon_ids=(),
+    )
+
+    distribution = _species_distribution(
+        rows=({"species_label": "Unknown", "motif_match": False},),
+        authority=authority,
+    )
+    assert distribution[0]["Accepted species"] == "Unresolved"
+
+
+def test_custom_taxonomy_path_is_forwarded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A selected reviewed mapping is loaded with the exact sidecar labels."""
+
+    expected = TaxonomyAuthority(records=(), expected_species=("Species_A",))
+    mapping = tmp_path / "taxonomy.tsv"
+    monkeypatch.setattr(
+        "orthofinder_interrogation_app.terminal_motif_page.read_taxonomy_mapping",
+        lambda **kwargs: (
+            expected if kwargs == {"path": mapping, "expected_species": ("Species_A",)} else None
+        ),
+    )
+    assert _load_taxonomy(species=("Species_A",), taxonomy_path_text=str(mapping)) is expected
+    monkeypatch.setattr(
+        "orthofinder_interrogation_app.terminal_motif_page.read_matching_bundled_taxonomy",
+        lambda **kwargs: (
+            expected if kwargs == {"expected_species": ("Species_A",)} else None
+        ),
+    )
+    assert _load_taxonomy(species=("Species_A",), taxonomy_path_text="") is expected
+
+
+def test_builder_rejects_partial_reconciliation(orthofinder2_results: Path, tmp_path: Path) -> None:
     """Missing source sequences cannot produce a misleading partial sidecar."""
 
     working = orthofinder2_results / "WorkingDirectory"
@@ -149,29 +282,33 @@ def test_builder_rejects_partial_reconciliation(
             results_dir=orthofinder2_results,
             output_path=tmp_path / "partial.parquet",
         )
-    assert main(
-        [
-            "--orthofinder-results-dir", str(tmp_path / "missing_results"),
-            "--output-parquet", str(tmp_path / "never.parquet"),
-        ]
-    ) == 2
+    assert (
+        main(
+            [
+                "--orthofinder-results-dir",
+                str(tmp_path / "missing_results"),
+                "--output-parquet",
+                str(tmp_path / "never.parquet"),
+            ]
+        )
+        == 2
+    )
 
 
-def test_builder_accepts_original_fasta_names(
-    orthofinder2_results: Path, tmp_path: Path
-) -> None:
+def test_builder_accepts_original_fasta_names(orthofinder2_results: Path, tmp_path: Path) -> None:
     """Original FASTA names are a supported fallback to Species-index files."""
 
     working = orthofinder2_results / "WorkingDirectory"
-    (working / "Species_A.fa").write_text(
-        ">0_0\nMAAN\n>0_1\nMQQN\n", encoding="utf-8"
-    )
+    (working / "Species_A.fa").write_text(">0_0\nMAAN\n>0_1\nMQQN\n", encoding="utf-8")
     (working / "Species_B.faa").write_text(">1_0\nMTTA\n", encoding="utf-8")
     output = tmp_path / "fallback.parquet"
-    assert build_sequence_sidecar(
-        results_dir=working,
-        output_path=output,
-    ) == 3
+    assert (
+        build_sequence_sidecar(
+            results_dir=working,
+            output_path=output,
+        )
+        == 3
+    )
 
 
 def test_builder_rejects_duplicate_internal_identifiers(

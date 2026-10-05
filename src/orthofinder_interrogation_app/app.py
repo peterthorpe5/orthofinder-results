@@ -275,9 +275,8 @@ def main() -> None:
         elif page_name == "C-terminal motif conservation":
             render_terminal_motif_page(
                 resource=resource,
-                sidecar_path_text=os.environ.get(
-                    TERMINAL_MOTIF_ENVIRONMENT_VARIABLE, ""
-                ),
+                sidecar_path_text=os.environ.get(TERMINAL_MOTIF_ENVIRONMENT_VARIABLE, ""),
+                taxonomy_path_text=taxonomy_path_text,
             )
         elif page_name == "Offline report":
             _render_offline_report(resource=resource)
@@ -385,9 +384,7 @@ def _render_overview(*, service: OrthoFinderQueryService) -> None:
         "what can be analysed now, and which page to use for each biological question."
     )
     counts = service.overview_counts()
-    authorities = tuple(
-        _display_authority_row(row=row) for row in service.overview_authorities()
-    )
+    authorities = tuple(_display_authority_row(row=row) for row in service.overview_authorities())
     columns = st.columns(5)
     columns[0].metric(
         "Group records",
@@ -608,9 +605,7 @@ def _render_group_search(*, service: OrthoFinderQueryService) -> None:
             ("Any", *group_types),
             help=_AUTHORITY_COLUMN_HELP["Group system"],
         )
-        nodes = service.list_hierarchy_nodes(
-            group_type="" if group_type == "Any" else group_type
-        )
+        nodes = service.list_hierarchy_nodes(group_type="" if group_type == "Any" else group_type)
         node_labels = tuple("ROOT" if not node else node for node in nodes)
         hierarchy_label = first_row[1].selectbox(
             "Species-tree level",
@@ -711,17 +706,11 @@ def _render_group_search(*, service: OrthoFinderQueryService) -> None:
             )
             sort_label = distance_row[3].selectbox("Sort", tuple(_SORT_LABEL_TO_MODE))
             paging = st.columns(2)
-            page_size = int(
-                paging[0].selectbox("Rows per page", (25, 50, 100, 250, 500), index=2)
-            )
+            page_size = int(paging[0].selectbox("Rows per page", (25, 50, 100, 250, 500), index=2))
             page_number = int(paging[1].number_input("Page", min_value=1, value=1))
         st.form_submit_button("Find groups", type="primary")
     hierarchy_node = (
-        None
-        if hierarchy_label == "Any"
-        else ""
-        if hierarchy_label == "ROOT"
-        else hierarchy_label
+        None if hierarchy_label == "Any" else "" if hierarchy_label == "ROOT" else hierarchy_label
     )
     filters = GroupSearchFilters(
         group_type="" if group_type == "Any" else group_type,
@@ -767,8 +756,7 @@ def _render_group_search(*, service: OrthoFinderQueryService) -> None:
         workbook_title="OrthoFinder group search",
     )
     labels_to_keys = {
-        _row_group_key(row=row).display_label(): _row_group_key(row=row)
-        for row in result.rows
+        _row_group_key(row=row).display_label(): _row_group_key(row=row) for row in result.rows
     }
     selected_label = st.selectbox("Selected matching group", tuple(labels_to_keys))
     selected_key = labels_to_keys[selected_label]
@@ -1107,9 +1095,7 @@ def _display_group_row(*, row: dict[str, Any]) -> dict[str, Any]:
         "Species represented": row["species_count"],
         "Highest copies in one species": row["max_copies_per_species"],
         "Average copies per represented species": row["mean_copies_per_species"],
-        "Stored distance coverage": _distance_status_label(
-            value=row.get("computation_status")
-        ),
+        "Stored distance coverage": _distance_status_label(value=row.get("computation_status")),
         "Stored mean pair distance": row["mean_distance"],
         "Stored distance spread (SD)": row["population_stddev_distance"],
     }

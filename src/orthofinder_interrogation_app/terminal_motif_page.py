@@ -14,6 +14,11 @@ from orthofinder_results.errors import InputValidationError
 from .documentation_page import render_page_guidance
 from .exports import render_plotly_figure, render_table_downloads
 from .models import ResourceIdentity
+from .taxonomy import (
+    TaxonomyAuthority,
+    read_matching_bundled_taxonomy,
+    read_taxonomy_mapping,
+)
 from .terminal_motif import (
     DEFAULT_MOTIF,
     DEFAULT_THRESHOLD,
@@ -32,6 +37,9 @@ _SUMMARY_HELP = {
     "Matching fraction": "Matching proteins divided by all sequence-bearing proteins in the HOG.",
     "Matching species": "Species with at least one protein ending with the motif.",
     "Matching species list": "Exact OrthoFinder labels for matching species.",
+    "Focal lineage represented": "Reviewed descendant species present in this HOG.",
+    "Focal lineage matching": "Reviewed descendant species with at least one motif match.",
+    "Focal lineage coverage": "Matching descendants divided by represented descendants.",
 }
 _MEMBER_HELP = {
     "Species": "Exact species label from the OrthoFinder run.",
@@ -45,7 +53,10 @@ _MEMBER_HELP = {
 
 
 def render_terminal_motif_page(
-    *, resource: ResourceIdentity, sidecar_path_text: str
+    *,
+    resource: ResourceIdentity,
+    sidecar_path_text: str,
+    taxonomy_path_text: str = "",
 ) -> None:
     """Render flexible terminal-motif conservation discovery and exports."""
 
@@ -57,10 +68,17 @@ def render_terminal_motif_page(
         "but any canonical amino-acid suffix up to 100 residues can be tested."
     )
     if not sidecar_path_text.strip():
-        st.info(
-            "This analysis needs the complete-proteome sequence sidecar. Build it once "
-            "from the same OrthoFinder Results_* directory, then launch the app with "
-            "--terminal-motif-parquet. The completed resource itself is not modified."
+        st.warning(
+            "No HOG motif analysis has run in this view. The open DuckDB contains HOG "
+            "memberships, but not the complete amino-acid sequences needed to inspect "
+            "their terminal residues."
+        )
+        st.subheader("One-time setup")
+        st.write(
+            "Build the sequence sidecar from the same OrthoFinder Results_* directory, "
+            "copy it beside the completed resource if necessary, and restart the viewer "
+            "with `--terminal-motif-parquet`. This does not rerun OrthoFinder or alter "
+            "the completed resource. HOG and taxonomic controls appear after it loads."
         )
         st.code(
             "orthofinder-terminal-motif-build \\\n"
@@ -76,18 +94,26 @@ def render_terminal_motif_page(
         st.error(str(error))
         return
 
+    authority = _load_taxonomy(species=species, taxonomy_path_text=taxonomy_path_text)
+
     controls = st.columns((1.0, 1.4, 1.0, 1.2))
     motif_text = controls[0].text_input(
         "Exact C-terminal motif", value=DEFAULT_MOTIF, help="Canonical one-letter codes only."
     )
     threshold_percent = controls[1].slider(
-        "Minimum matching proteins", min_value=0, max_value=100,
-        value=int(DEFAULT_THRESHOLD * 100), step=1,
+        "Minimum matching proteins",
+        min_value=0,
+        max_value=100,
+        value=int(DEFAULT_THRESHOLD * 100),
+        step=1,
         help="Percentage of sequence-bearing proteins in a HOG ending with the exact motif.",
     )
     minimum_species = controls[2].number_input(
-        "Minimum species", min_value=1, max_value=max(1, len(species)),
-        value=min(3, max(1, len(species))), step=1,
+        "Minimum species",
+        min_value=1,
+        max_value=max(1, len(species)),
+        value=min(3, max(1, len(species))),
+        step=1,
     )
     maximum_rows = controls[3].number_input(
         "Maximum HOGs", min_value=10, max_value=20_000, value=2_000, step=10
@@ -101,12 +127,68 @@ def render_terminal_motif_page(
         ),
     )
     hierarchy_node = st.text_input(
-        "HOG hierarchy node", value="N0",
+        "HOG hierarchy node",
+        value="N0",
         help="N0 is the root HOG level in the current analysis; exact labels are retained.",
     )
+    focal_taxon_id: int | None = None
+    required_taxon_ids: tuple[int, ...] = ()
+    excluded_taxon_ids: tuple[int, ...] = ()
+    lineage_threshold = 0.0
+    if authority is None:
+        st.warning(
+            "No reviewed taxonomy authority exactly matches these sequence labels. "
+            "Exact-species filtering remains available, but lineage filtering is "
+            "disabled. Supply a reviewed taxonomy TSV under Advanced settings."
+        )
+    else:
+        st.subheader("Taxonomic conservation filters")
+        options = authority.taxon_options()
+        option_by_label = {option.display_label(): option for option in options}
+        labels = tuple(option_by_label)
+        taxonomy_controls = st.columns((1.5, 1.0))
+        focal_label = taxonomy_controls[0].selectbox(
+            "Focal lineage",
+            options=("All reviewed sampled species", *labels),
+            help=(
+                "Restrict conservation calculations to reviewed sampled descendants "
+                "of this taxon, for example flowering plants, eudicots or humans."
+            ),
+        )
+        lineage_threshold = (
+            taxonomy_controls[1].slider(
+                "Minimum matching descendants",
+                min_value=0,
+                max_value=100,
+                value=80,
+                step=1,
+                help=(
+                    "Percentage of represented descendant species that must contain at "
+                    "least one protein ending with the motif."
+                ),
+            )
+            / 100.0
+        )
+        if focal_label != "All reviewed sampled species":
+            focal_taxon_id = option_by_label[focal_label].taxon_id
+        required_labels = st.multiselect(
+            "Lineages that must contain a matching descendant",
+            options=labels,
+            help=(
+                "Optional cross-clade requirement. For example, require both a plant "
+                "lineage and Homo to contain at least one matching protein."
+            ),
+        )
+        excluded_labels = st.multiselect(
+            "Lineages that must not contain a matching descendant",
+            options=labels,
+            help="Optional negative control; leave empty for the usual discovery analysis.",
+        )
+        required_taxon_ids = tuple(option_by_label[label].taxon_id for label in required_labels)
+        excluded_taxon_ids = tuple(option_by_label[label].taxon_id for label in excluded_labels)
     try:
         motif = validate_motif(motif=motif_text)
-        rows = motif_group_summary(
+        query_rows = motif_group_summary(
             resource=resource,
             sidecar_path=sidecar,
             motif=motif,
@@ -114,8 +196,16 @@ def render_terminal_motif_page(
             minimum_species=int(minimum_species),
             required_species=required_species,
             hierarchy_node=hierarchy_node,
-            maximum_rows=int(maximum_rows),
+            maximum_rows=20_000 if authority is not None else int(maximum_rows),
         )
+        rows = _apply_taxonomy_filters(
+            rows=query_rows,
+            authority=authority,
+            focal_taxon_id=focal_taxon_id,
+            minimum_lineage_fraction=lineage_threshold,
+            required_taxon_ids=required_taxon_ids,
+            excluded_taxon_ids=excluded_taxon_ids,
+        )[: int(maximum_rows)]
     except InputValidationError as error:
         st.error(str(error))
         return
@@ -172,6 +262,18 @@ def render_terminal_motif_page(
         hierarchy_node=hierarchy_node,
     )
     member_rows = tuple(_display_member(row=row) for row in members)
+    if authority is not None:
+        st.subheader("Taxonomic distribution of the selected HOG")
+        taxon_rows = _species_distribution(rows=members, authority=authority)
+        st.dataframe(taxon_rows, width="stretch", hide_index=True)
+        render_table_downloads(
+            records=taxon_rows,
+            file_stem=f"{selected}_{motif}_taxonomic_distribution",
+            key="terminal_motif_taxonomy_tsv",
+            column_definitions={},
+            workbook_title=f"{selected} taxonomic motif distribution",
+        )
+    st.subheader("Protein-level calls")
     st.dataframe(member_rows, width="stretch", hide_index=True)
     render_table_downloads(
         records=member_rows,
@@ -200,7 +302,93 @@ def _display_summary(*, row: Mapping[str, Any]) -> dict[str, Any]:
         "Matching fraction": row["matching_fraction"],
         "Matching species": row["matching_species_count"],
         "Matching species list": row["matching_species"] or "",
+        "Focal lineage represented": row.get("focal_represented_species", ""),
+        "Focal lineage matching": row.get("focal_matching_species", ""),
+        "Focal lineage coverage": row.get("focal_matching_fraction", ""),
     }
+
+
+def _load_taxonomy(
+    *, species: tuple[str, ...], taxonomy_path_text: str
+) -> TaxonomyAuthority | None:
+    """Load an exact reviewed taxonomy authority without guessing labels."""
+
+    if taxonomy_path_text.strip():
+        return read_taxonomy_mapping(path=Path(taxonomy_path_text), expected_species=species)
+    return read_matching_bundled_taxonomy(expected_species=species)
+
+
+def _species_set(value: Any) -> set[str]:
+    """Parse a semicolon-delimited species aggregation."""
+
+    return {item for item in str(value or "").split("; ") if item}
+
+
+def _apply_taxonomy_filters(
+    *,
+    rows: Sequence[Mapping[str, Any]],
+    authority: TaxonomyAuthority | None,
+    focal_taxon_id: int | None,
+    minimum_lineage_fraction: float,
+    required_taxon_ids: Sequence[int],
+    excluded_taxon_ids: Sequence[int],
+) -> tuple[dict[str, Any], ...]:
+    """Annotate and filter HOG summaries with reviewed descendant sets."""
+
+    if authority is None:
+        return tuple(dict(row) for row in rows)
+    focal = set(
+        authority.reviewed_species
+        if focal_taxon_id is None
+        else authority.target_species(taxon_id=focal_taxon_id)
+    )
+    required = [set(authority.target_species(taxon_id=value)) for value in required_taxon_ids]
+    excluded = [set(authority.target_species(taxon_id=value)) for value in excluded_taxon_ids]
+    result: list[dict[str, Any]] = []
+    for source in rows:
+        represented = _species_set(source.get("represented_species"))
+        matching = _species_set(source.get("matching_species"))
+        focal_represented = represented & focal
+        focal_matching = matching & focal
+        fraction = len(focal_matching) / len(focal_represented) if focal_represented else 0.0
+        if not focal_represented or fraction < minimum_lineage_fraction:
+            continue
+        if any(not matching.intersection(target) for target in required):
+            continue
+        if any(matching.intersection(target) for target in excluded):
+            continue
+        row = dict(source)
+        row["focal_represented_species"] = len(focal_represented)
+        row["focal_matching_species"] = len(focal_matching)
+        row["focal_matching_fraction"] = fraction
+        result.append(row)
+    return tuple(result)
+
+
+def _species_distribution(
+    *, rows: Sequence[Mapping[str, Any]], authority: TaxonomyAuthority
+) -> tuple[dict[str, Any], ...]:
+    """Summarise motif calls by reviewed species for one HOG."""
+
+    records = {row.workflow_species_label: row for row in authority.reviewed_records}
+    grouped: dict[str, list[Mapping[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(str(row["species_label"]), []).append(row)
+    output = []
+    for species, members in sorted(grouped.items()):
+        record = records.get(species)
+        matches = sum(bool(row["motif_match"]) for row in members)
+        output.append(
+            {
+                "OrthoFinder species": species,
+                "Accepted species": record.accepted_species_name if record else "Unresolved",
+                "NCBI taxon ID": record.ncbi_taxon_id if record else "",
+                "Proteins": len(members),
+                "Matching proteins": matches,
+                "Species has motif": matches > 0,
+            }
+        )
+    return tuple(output)
 
 
 def _display_member(*, row: Mapping[str, Any]) -> dict[str, Any]:
@@ -217,9 +405,7 @@ def _display_member(*, row: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _motif_figure(
-    *, rows: Sequence[Mapping[str, Any]], motif: str, threshold: float
-) -> go.Figure:
+def _motif_figure(*, rows: Sequence[Mapping[str, Any]], motif: str, threshold: float) -> go.Figure:
     """Build the interactive protein-fraction versus species-breadth plot."""
 
     figure = go.Figure(
@@ -228,8 +414,7 @@ def _motif_figure(
             y=[int(row["matching_species_count"]) for row in rows],
             mode="markers",
             customdata=[
-                [row["group_id"], row["sequence_count"], row["species_count"]]
-                for row in rows
+                [row["group_id"], row["sequence_count"], row["species_count"]] for row in rows
             ],
             marker={
                 "size": [max(7, min(30, 5 + int(row["sequence_count"]) ** 0.5)) for row in rows],
@@ -264,10 +449,9 @@ def _members_to_fasta(*, rows: Sequence[Mapping[str, Any]]) -> str:
     chunks: list[str] = []
     for row in rows:
         header = (
-            f">{row['member_id']} species={row['species_label']} "
-            f"motif_match={row['motif_match']}"
+            f">{row['member_id']} species={row['species_label']} motif_match={row['motif_match']}"
         )
         sequence = str(row["sequence"])
-        wrapped = (sequence[index:index + 80] for index in range(0, len(sequence), 80))
+        wrapped = (sequence[index : index + 80] for index in range(0, len(sequence), 80))
         chunks.extend((header, *wrapped))
     return "\n".join(chunks) + "\n"

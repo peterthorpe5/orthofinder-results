@@ -11,7 +11,7 @@ import pyarrow.parquet as pq
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from orthofinder_interrogation_app import app
+from orthofinder_interrogation_app import app, terminal_motif_page
 from orthofinder_interrogation_app.evolutionary_page import (
     ACTIVE_GROUP_STATE,
     COMPARISON_STATE,
@@ -26,6 +26,7 @@ from orthofinder_interrogation_app.launcher import (
 )
 from orthofinder_interrogation_app.report_data import load_visualisation_catalog
 from orthofinder_interrogation_app.resource import open_resource
+from orthofinder_interrogation_app.taxonomy import TaxonomyAuthority, TaxonomyRecord
 
 
 def _application_test(*, application_resource: Path, monkeypatch: pytest.MonkeyPatch) -> AppTest:
@@ -172,7 +173,8 @@ def test_terminal_motif_route_explains_missing_sequence_sidecar(
     test.run()
     assert not test.exception
     assert any(header.value == "C-terminal motif conservation" for header in test.header)
-    assert any("complete-proteome sequence sidecar" in item.value for item in test.info)
+    assert any("No HOG motif analysis" in item.value for item in test.warning)
+    assert any("One-time setup" == item.value for item in test.subheader)
     assert any("orthofinder-terminal-motif-build" in item.value for item in test.code)
 
 
@@ -188,16 +190,22 @@ def test_terminal_motif_route_renders_complete_results_and_downloads(
         pa.Table.from_pylist(
             [
                 {
-                    "internal_id": "0_0", "species_label": "Species_A",
-                    "member_id": "alpha_1", "sequence": "MAAN",
+                    "internal_id": "0_0",
+                    "species_label": "Species_A",
+                    "member_id": "alpha_1",
+                    "sequence": "MAAN",
                 },
                 {
-                    "internal_id": "0_1", "species_label": "Species_A",
-                    "member_id": "alpha_2", "sequence": "MQQN",
+                    "internal_id": "0_1",
+                    "species_label": "Species_A",
+                    "member_id": "alpha_2",
+                    "sequence": "MQQN",
                 },
                 {
-                    "internal_id": "1_0", "species_label": "Species_B",
-                    "member_id": "beta_1", "sequence": "MTTN",
+                    "internal_id": "1_0",
+                    "species_label": "Species_B",
+                    "member_id": "beta_1",
+                    "sequence": "MTTN",
                 },
             ]
         ),
@@ -205,6 +213,36 @@ def test_terminal_motif_route_renders_complete_results_and_downloads(
         compression="zstd",
     )
     monkeypatch.setenv(TERMINAL_MOTIF_ENVIRONMENT_VARIABLE, str(sidecar))
+    records = tuple(
+        TaxonomyRecord(
+            workflow_species_label=label,
+            source_species_name=label,
+            accepted_species_name=f"Accepted {label}",
+            ncbi_taxon_id=taxon_id,
+            parent_taxon_id=33090,
+            parent_taxon_name="Viridiplantae",
+            lineage_taxon_ids=(1, 33090),
+            lineage_names=("cellular organisms", "Viridiplantae"),
+            mapping_status="REVIEWED",
+            mapping_method="manual",
+            mapping_source="test",
+            source_date="2026-10-03",
+            source_version="test",
+            reviewed_by="tester",
+            reviewed_at_utc="2026-10-03T00:00:00Z",
+            review_note="test",
+        )
+        for label, taxon_id in (("Species_A", 1001), ("Species_B", 1002))
+    )
+    authority = TaxonomyAuthority(
+        records=records,
+        expected_species=("Species_A", "Species_B"),
+    )
+    monkeypatch.setattr(
+        terminal_motif_page,
+        "_load_taxonomy",
+        lambda **_kwargs: authority,
+    )
     test = _application_test(
         application_resource=application_resource,
         monkeypatch=monkeypatch,
@@ -213,6 +251,11 @@ def test_terminal_motif_route_renders_complete_results_and_downloads(
     test.run()
     assert not test.exception
     assert any(subheader.value == "Conservation landscape" for subheader in test.subheader)
+    assert any(subheader.value == "Taxonomic conservation filters" for subheader in test.subheader)
+    assert any(
+        subheader.value == "Taxonomic distribution of the selected HOG"
+        for subheader in test.subheader
+    )
     assert any(metric.label == "Passing HOGs" and metric.value == "1" for metric in test.metric)
     assert len(test.dataframe) >= 2
     assert len(test.get("download_button")) >= 6

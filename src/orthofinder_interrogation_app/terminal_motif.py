@@ -19,9 +19,7 @@ DEFAULT_THRESHOLD = 0.80
 MAX_MOTIF_LENGTH = 100
 MAX_RESULT_ROWS = 20_000
 _CANONICAL_MOTIF = re.compile(r"^[ACDEFGHIKLMNPQRSTVWY]+$")
-REQUIRED_COLUMNS = frozenset(
-    {"internal_id", "species_label", "member_id", "sequence"}
-)
+REQUIRED_COLUMNS = frozenset({"internal_id", "species_label", "member_id", "sequence"})
 
 
 def validate_motif(*, motif: str) -> str:
@@ -43,9 +41,7 @@ def validate_motif(*, motif: str) -> str:
     if not normalised:
         raise InputValidationError("Enter at least one terminal amino-acid residue.")
     if len(normalised) > MAX_MOTIF_LENGTH:
-        raise InputValidationError(
-            f"Terminal motifs are limited to {MAX_MOTIF_LENGTH} residues."
-        )
+        raise InputValidationError(f"Terminal motifs are limited to {MAX_MOTIF_LENGTH} residues.")
     if _CANONICAL_MOTIF.fullmatch(normalised) is None:
         raise InputValidationError(
             "Use canonical one-letter amino-acid codes only: ACDEFGHIKLMNPQRSTVWY."
@@ -89,9 +85,7 @@ def _validate_sequence_sidecar_cached(
     columns = {str(row[0]) for row in description}
     missing = sorted(REQUIRED_COLUMNS - columns)
     if missing:
-        raise InputValidationError(
-            "Sequence sidecar lacks required columns: " + "; ".join(missing)
-        )
+        raise InputValidationError("Sequence sidecar lacks required columns: " + "; ".join(missing))
 
 
 def motif_species(*, sidecar_path: Path) -> tuple[str, ...]:
@@ -155,6 +149,8 @@ def motif_group_summary(
             "   count(DISTINCT species_label) AS species_count,"
             "   count(*) FILTER (WHERE motif_match) AS matching_sequence_count,"
             "   count(DISTINCT species_label) FILTER (WHERE motif_match) AS matching_species_count,"
+            "   string_agg(DISTINCT species_label, '; ' ORDER BY species_label)"
+            "     AS represented_species,"
             "   string_agg(DISTINCT species_label, '; ' ORDER BY species_label)"
             "     FILTER (WHERE motif_match) AS matching_species"
             " FROM joined GROUP BY group_id"

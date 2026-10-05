@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.10.1 - 2026-10-03
+
+- Make the missing-sequence state explicit so it cannot be mistaken for an empty HOG
+  result.
+- Add reviewed lineage filtering to C-terminal motif discovery, including focal,
+  required-comparison and excluded lineages.
+- Report motif conservation among represented descendants of the selected lineage and
+  provide a downloadable species-by-species taxonomic distribution for every selected HOG.
+- Retain fail-closed exact label matching: a custom dataset must supply a reviewed taxonomy
+  TSV when it does not exactly match the packaged Results_Feb26 authority.
+
 ## 0.10.0 - 2026-10-03
 
 - Add a dedicated **C-terminal motif conservation** page for the Cereblon pilot-data
