@@ -216,7 +216,12 @@ def test_render_table_downloads_preserves_tsv_and_adds_excel(
     ]
     assert fake.calls[0]["mime"] == "text/tab-separated-values"
     assert fake.calls[1]["mime"] == exports.EXCEL_MIME_TYPE
-    assert bytes(fake.calls[1]["data"]).startswith(b"PK")
+    assert callable(fake.calls[0]["data"])
+    assert fake.calls[0]["data"]().startswith(b"Group ID\tAverage distance\n")
+    assert callable(fake.calls[1]["data"])
+    assert fake.calls[1]["data"]().startswith(b"PK")
+    assert fake.calls[0]["on_click"] == "ignore"
+    assert fake.calls[1]["on_click"] == "ignore"
     with pytest.raises(ValueError, match="non-empty key"):
         exports.render_table_downloads(
             records=({"Group ID": "g"},),

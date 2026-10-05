@@ -32,6 +32,12 @@ def _write_fake_package(*, root: Path) -> Path:
         "benchmark_individual_comparisons",
         "benchmark_cluster_classifications",
         "pairwise_distances",
+        "expression_identifier_aliases",
+        "expression_member_mapping",
+        "expression_member_summary",
+        "expression_context",
+        "expression_group_summary",
+        "expression_import_audit",
     )
     runner.write_text(
         "#!/usr/bin/env bash\n"
@@ -42,13 +48,15 @@ def _write_fake_package(*, root: Path) -> Path:
         "  if [[ \"$1\" == '--output-dir' ]]; then output=$2; shift 2; else shift; fi\n"
         "done\n"
         "[[ -n \"$output\" ]]\n"
-        "mkdir -p \"$output/tables\" \"$output/duckdb\" \"$output/qc\"\n"
+        "mkdir -p \"$output/tables\" \"$output/duckdb\" \"$output/qc\" "
+        "\"$output/evidence\"\n"
         + "".join(
             f"printf 'header\\nrow\\n' | gzip -c > "
             f'"$output/tables/{name}.tsv.gz"\n'
             for name in table_names
         )
         + "printf 'duckdb\\n' > \"$output/duckdb/orthofinder_results.duckdb\"\n"
+        "printf 'parquet\\n' > \"$output/evidence/protein_sequences.parquet\"\n"
         "printf 'check_name\\tstatus\\nall\\tPASS\\n' > "
         '"$output/qc/validation_checks.tsv"\n'
         "printf '{\"status\": \"complete\"}\\n' > \"$output/run_manifest.json\"\n",
@@ -70,6 +78,11 @@ def _arguments(*, tmp_path: Path) -> tuple[list[str], Path, Path]:
     )
     output = tmp_path / "persistent/dispersion_benchmark"
     capture = tmp_path / "captured_arguments.txt"
+    expression_manifest = tmp_path / "expression_resources.tsv"
+    expression_manifest.write_text(
+        "resource_id\tresource_type\tspecies_column\tdataset\tpath\tsha256\tinclude\n",
+        encoding="utf-8",
+    )
     return (
         [
             str(package),
@@ -77,6 +90,7 @@ def _arguments(*, tmp_path: Path) -> tuple[list[str], Path, Path]:
             str(results),
             "-",
             "-",
+            str(expression_manifest),
             "benchmark-run",
             str(output),
             "--distance-max-members",
@@ -121,11 +135,14 @@ def test_benchmark_wrapper_stages_inputs_and_keeps_formal_output_persistent(
         "--results-dir",
         "--focus-proteins",
         "--benchmark-proteins",
+        "--expression-manifest",
         "--work-dir",
     ):
         index = captured.index(option)
         assert captured[index + 1].startswith(str(node_tmp))
     assert captured[captured.index("--action") + 1] == "dispersion-benchmark"
+    assert "--include-protein-sequences" in captured
+    assert captured[captured.index("--expression-threads") + 1] == "9"
     assert captured[captured.index("--output-dir") + 1] == str(output)
     assert not tuple(node_tmp.iterdir())
     assert not tuple(output.parent.glob(".*.publish.lock"))

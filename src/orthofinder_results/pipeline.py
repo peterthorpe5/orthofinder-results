@@ -23,6 +23,7 @@ from orthofinder_interrogation_app.focus import (
     FocusProteinAuthority,
     read_focus_proteins,
 )
+from orthofinder_interrogation_app.terminal_motif_cli import build_sequence_sidecar
 
 from . import __schema_version__, __version__
 from .benchmark_analysis import (
@@ -41,6 +42,12 @@ from .distances import (
     summarise_distances,
 )
 from .errors import DistanceCalculationError, InputValidationError, PublicationError
+from .expression_analysis import (
+    ExpressionAuthority,
+    ExpressionPublication,
+    publish_expression_evidence,
+    read_expression_manifest,
+)
 from .focus_analysis import (
     FocusSelection,
     publish_focus_cluster_results,
@@ -280,6 +287,60 @@ GROUP_TYPES = {
         "distance_sd_control_median": "float64",
         "distance_sd_control_percentile": "float64",
     },
+    "expression_identifier_aliases": {"mapping_tier": "int64"},
+    "expression_member_mapping": {
+        "matched_gene_count": "int64",
+    },
+    "expression_member_summary": {
+        "experiment_count": "int64",
+        "expression_unit_count": "int64",
+        "context_count": "int64",
+        "positive_context_count": "int64",
+        "positive_context_fraction": "float64",
+        "minimum_context_expression_value": "float64",
+        "maximum_context_expression_value": "float64",
+        "median_context_expression_value": "float64",
+        "broad_expression_supported": "bool",
+    },
+    "expression_context": {
+        "assay_count": "int64",
+        "expression_value": "float64",
+        "expression_minimum": "float64",
+        "expression_lower_quartile": "float64",
+        "expression_median": "float64",
+        "expression_upper_quartile": "float64",
+        "expression_maximum": "float64",
+        "expression_positive": "bool",
+    },
+    "expression_group_summary": {
+        "member_count": "int64",
+        "unique_mapped_member_count": "int64",
+        "ambiguous_member_count": "int64",
+        "not_mapped_member_count": "int64",
+        "expression_observed_member_count": "int64",
+        "broad_expression_member_count": "int64",
+        "mapped_species_count": "int64",
+        "expression_observed_species_count": "int64",
+        "mapping_fraction": "float64",
+        "expression_observed_fraction": "float64",
+    },
+    "expression_import_audit": {
+        "expression_partition_count": "int64",
+        "metadata_partition_count": "int64",
+        "resource_species_count": "int64",
+        "orthofinder_species_count": "int64",
+        "scanned_expression_partition_count": "int64",
+        "scanned_metadata_partition_count": "int64",
+        "alias_count": "int64",
+        "member_count": "int64",
+        "unique_mapped_member_count": "int64",
+        "ambiguous_member_count": "int64",
+        "not_mapped_member_count": "int64",
+        "expression_context_count": "int64",
+        "expression_group_count": "int64",
+        "minimum_expression_value": "float64",
+        "broad_positive_fraction": "float64",
+    },
 }
 
 
@@ -366,6 +427,13 @@ def run_pipeline(
     benchmark_proteins_path: Path | None = None,
     benchmark_controls_per_group: int = 3,
     benchmark_bootstrap_resamples: int = 1_000,
+    expression_manifest_path: Path | None = None,
+    expression_aliases_path: Path | None = None,
+    expression_minimum_value: float = 0.5,
+    expression_broad_fraction: float = 0.5,
+    expression_threads: int = 4,
+    expression_memory_mb: int = 8_192,
+    include_protein_sequences: bool = False,
 ) -> dict[str, Any]:
     """Build a complete versioned result resource without mutating its authority.
 
@@ -396,6 +464,13 @@ def run_pipeline(
         benchmark_proteins_path: Optional housekeeping/R marker authority.
         benchmark_controls_per_group: Unique distance-blind controls per target.
         benchmark_bootstrap_resamples: Contrast confidence-interval iterations.
+        expression_manifest_path: Optional checksum-bound Expression Atlas manifest.
+        expression_aliases_path: Optional reviewed species/member alias TSV.
+        expression_minimum_value: Minimum positive context expression value.
+        expression_broad_fraction: Positive-context fraction called broad expression.
+        expression_threads: Maximum DuckDB threads used for expression integration.
+        expression_memory_mb: DuckDB memory bound before node-local spilling.
+        include_protein_sequences: Publish a complete-proteome Parquet sidecar.
 
     Returns:
         Completed run manifest.
@@ -424,6 +499,12 @@ def run_pipeline(
         benchmark_enabled=benchmark_proteins_path is not None,
         benchmark_controls_per_group=benchmark_controls_per_group,
         benchmark_bootstrap_resamples=benchmark_bootstrap_resamples,
+        expression_enabled=expression_manifest_path is not None,
+        expression_aliases_enabled=expression_aliases_path is not None,
+        expression_minimum_value=expression_minimum_value,
+        expression_broad_fraction=expression_broad_fraction,
+        expression_threads=expression_threads,
+        expression_memory_mb=expression_memory_mb,
     )
     focus_path = (
         Path(focus_proteins_path).expanduser().resolve()
@@ -441,6 +522,21 @@ def run_pipeline(
     benchmark_authority = (
         read_benchmark_authority(path=benchmark_path)
         if benchmark_path is not None
+        else None
+    )
+    expression_manifest = (
+        Path(expression_manifest_path).expanduser().resolve()
+        if expression_manifest_path is not None
+        else None
+    )
+    expression_authority = (
+        read_expression_manifest(path=expression_manifest)
+        if expression_manifest is not None
+        else None
+    )
+    expression_aliases = (
+        Path(expression_aliases_path).expanduser().resolve()
+        if expression_aliases_path is not None
         else None
     )
     layout = discover_layout(results_dir=results_dir)
@@ -469,6 +565,8 @@ def run_pipeline(
         alignment_dir=resolved_alignment_dir,
         focus_proteins_path=focus_path,
         benchmark_proteins_path=benchmark_path,
+        expression_authority=expression_authority,
+        expression_aliases_path=expression_aliases,
     )
     _LOGGER.info(
         "Source inventory finished: files=%s, elapsed_seconds=%.3f",
@@ -524,6 +622,14 @@ def run_pipeline(
             benchmark_proteins_path=benchmark_path,
             benchmark_controls_per_group=benchmark_controls_per_group,
             benchmark_bootstrap_resamples=benchmark_bootstrap_resamples,
+            expression_authority=expression_authority,
+            expression_manifest_path=expression_manifest,
+            expression_aliases_path=expression_aliases,
+            expression_minimum_value=expression_minimum_value,
+            expression_broad_fraction=expression_broad_fraction,
+            expression_threads=expression_threads,
+            expression_memory_mb=expression_memory_mb,
+            include_protein_sequences=include_protein_sequences,
         )
         # Close the staging file handler before checksums are verified or files
         # cross filesystems. Subsequent CLI messages remain console-only.
@@ -984,6 +1090,14 @@ def _build_resource(
     benchmark_proteins_path: Path | None,
     benchmark_controls_per_group: int,
     benchmark_bootstrap_resamples: int,
+    expression_authority: ExpressionAuthority | None,
+    expression_manifest_path: Path | None,
+    expression_aliases_path: Path | None,
+    expression_minimum_value: float,
+    expression_broad_fraction: float,
+    expression_threads: int,
+    expression_memory_mb: int,
+    include_protein_sequences: bool,
 ) -> dict[str, Any]:
     """Populate one staging directory and return its complete manifest.
 
@@ -1015,6 +1129,14 @@ def _build_resource(
         benchmark_proteins_path: Physical benchmark authority copied to provenance.
         benchmark_controls_per_group: Unique non-focus controls per target.
         benchmark_bootstrap_resamples: Deterministic contrast bootstrap iterations.
+        expression_authority: Optional verified Expression Atlas authority.
+        expression_manifest_path: Physical manifest copied into provenance.
+        expression_aliases_path: Optional reviewed exact-alias authority.
+        expression_minimum_value: Minimum positive expression context value.
+        expression_broad_fraction: Fraction of positive contexts called broad.
+        expression_threads: Maximum expression integration threads.
+        expression_memory_mb: Expression DuckDB memory bound in MiB.
+        include_protein_sequences: Publish the complete protein-sequence sidecar.
 
     Returns:
         Complete resource manifest.
@@ -1025,7 +1147,15 @@ def _build_resource(
     qc_dir = staging / "qc"
     report_dir = staging / "report"
     database_dir = staging / "duckdb"
-    for directory in (tables, provenance, qc_dir, report_dir, database_dir):
+    evidence_dir = staging / "evidence"
+    for directory in (
+        tables,
+        provenance,
+        qc_dir,
+        report_dir,
+        database_dir,
+        evidence_dir,
+    ):
         directory.mkdir(parents=True, exist_ok=True)
     stages = _StageRecorder(path=staging / "logs" / "stage_metrics.tsv")
     with stages.record(stage="provenance") as stage:
@@ -1045,6 +1175,16 @@ def _build_resource(
             shutil.copy2(
                 benchmark_proteins_path,
                 provenance / "dispersion_benchmark_authority.tsv",
+            )
+        if expression_manifest_path is not None:
+            shutil.copy2(
+                expression_manifest_path,
+                provenance / "expression_resource_manifest.tsv",
+            )
+        if expression_aliases_path is not None:
+            shutil.copy2(
+                expression_aliases_path,
+                provenance / "expression_reviewed_aliases.tsv",
             )
         stage["details"] = f"input_files={len(source_inventory)}"
 
@@ -1071,6 +1211,32 @@ def _build_resource(
             species_from_groups=species_from_groups,
         )
         stage["details"] = f"species={species_count};sequences={sequence_count}"
+    protein_sequence_count = 0
+    if include_protein_sequences:
+        with stages.record(stage="protein_sequence_sidecar") as stage:
+            protein_sequence_count = build_sequence_sidecar(
+                results_dir=layout.results_dir,
+                output_path=evidence_dir / "protein_sequences.parquet",
+            )
+            stage["details"] = f"proteins={protein_sequence_count}"
+    expression_publication: ExpressionPublication | None = None
+    if expression_authority is not None:
+        with stages.record(stage="rna_seq_expression_evidence") as stage:
+            expression_publication = publish_expression_evidence(
+                tables_dir=tables,
+                work_dir=staging,
+                run_id=run_id,
+                authority=expression_authority,
+                additional_aliases_path=expression_aliases_path,
+                minimum_expression_value=expression_minimum_value,
+                broad_positive_fraction=expression_broad_fraction,
+                threads=expression_threads,
+                memory_limit_mb=expression_memory_mb,
+            )
+            stage["details"] = ";".join(
+                f"{key}={value}"
+                for key, value in sorted(expression_publication.counts.items())
+            )
     focus_selection: FocusSelection | None = None
     if focus_authority is not None:
         with stages.record(stage="e3_focus_selection") as stage:
@@ -1270,6 +1436,7 @@ def _build_resource(
             "tree_inventory_count": len(tree_inventory),
             "tree_payload_count": tree_payload_count,
             "tree_node_count": tree_node_count,
+            "protein_sequence_count": protein_sequence_count,
             "distance_group_count": len(distance_summaries),
             "distance_pair_count": distance_count,
             "focus_seed_count": (
@@ -1282,6 +1449,11 @@ def _build_resource(
             ),
             "focus_group_count": len(focus_result_rows),
             **benchmark_counts,
+            **(
+                dict(expression_publication.counts)
+                if expression_publication is not None
+                else {}
+            ),
         },
     }
     if focus_selection is not None:
@@ -1294,6 +1466,13 @@ def _build_resource(
             "seed_matches": "tables/e3_seed_matches.tsv.gz",
             "seed_audit": "tables/e3_seed_catalogue_audit.tsv.gz",
             "pairwise_distances": "tables/pairwise_distances.tsv.gz",
+        }
+    if include_protein_sequences:
+        run_metadata["protein_sequence_evidence"] = {
+            "protein_count": protein_sequence_count,
+            "path": "evidence/protein_sequences.parquet",
+            "identifier_authority": "WorkingDirectory/SequenceIDs.txt",
+            "sequence_authority": "WorkingDirectory/Species*.fa",
         }
     if benchmark_plan is not None:
         run_metadata["dispersion_benchmark"] = {
@@ -1318,6 +1497,25 @@ def _build_resource(
                 "tables/benchmark_cluster_classifications.tsv.gz"
             ),
             "matched_controls": "tables/benchmark_matched_controls.tsv.gz",
+        }
+    if expression_publication is not None and expression_authority is not None:
+        run_metadata["rna_seq_expression"] = {
+            "manifest_name": expression_authority.manifest_path.name,
+            "manifest_sha256": expression_authority.manifest_sha256,
+            "minimum_expression_value": expression_minimum_value,
+            "broad_positive_fraction": expression_broad_fraction,
+            "unit_selection_policy": (
+                "TPM when present per species/experiment; otherwise FPKM"
+            ),
+            "mapping_policy": (
+                "exact species-scoped gene_id or gene_name aliases; ambiguous matches "
+                "remain unavailable"
+            ),
+            "member_mapping": "tables/expression_member_mapping.tsv.gz",
+            "member_summary": "tables/expression_member_summary.tsv.gz",
+            "context_evidence": "tables/expression_context.tsv.gz",
+            "group_summary": "tables/expression_group_summary.tsv.gz",
+            "import_audit": "tables/expression_import_audit.tsv.gz",
         }
     report_path = report_dir / "orthofinder_results_summary.html"
     with stages.record(stage="offline_html_report") as stage:
@@ -1364,6 +1562,45 @@ def _build_resource(
         benchmark_plan=benchmark_plan,
         benchmark_counts=benchmark_counts,
     )
+    if expression_publication is not None:
+        expression_counts = dict(expression_publication.counts)
+        expression_member_count = expression_counts.get("expression_member_count", 0)
+        expression_mapping_total = sum(
+            expression_counts.get(name, 0)
+            for name in (
+                "expression_unique_mapping_count",
+                "expression_ambiguous_mapping_count",
+                "expression_not_mapped_count",
+            )
+        )
+        qc_rows.extend(
+            (
+                _qc(
+                    "expression_mapping_audit_complete",
+                    expression_mapping_total == expression_member_count,
+                    expression_mapping_total,
+                    expression_member_count,
+                    "Every sequence identifier has a unique, ambiguous or not-mapped state.",
+                ),
+                _qc(
+                    "expression_group_summary_present",
+                    expression_counts.get("expression_group_count", 0) > 0,
+                    expression_counts.get("expression_group_count", 0),
+                    ">0",
+                    "Expression mapping is summarised for every published group authority.",
+                ),
+            )
+        )
+    if include_protein_sequences:
+        qc_rows.append(
+            _qc(
+                "protein_sequence_sidecar_complete",
+                protein_sequence_count == sequence_count,
+                protein_sequence_count,
+                sequence_count,
+                "Every SequenceIDs record reconciles to one complete-proteome FASTA row.",
+            )
+        )
     with stages.record(stage="quality_control") as stage:
         write_tsv(
             path=qc_dir / "validation_checks.tsv",
@@ -1395,6 +1632,7 @@ def _build_resource(
             "group_species_statistic_count": group_species_statistic_count,
             "species_count": species_count,
             "sequence_count": sequence_count,
+            "protein_sequence_count": protein_sequence_count,
             "tree_file_count": len(tree_inventory),
             "tree_payload_count": tree_payload_count,
             "tree_node_count": tree_node_count,
@@ -1411,6 +1649,11 @@ def _build_resource(
             ),
             "focus_group_count": len(focus_result_rows),
             **benchmark_counts,
+            **(
+                dict(expression_publication.counts)
+                if expression_publication is not None
+                else {}
+            ),
         },
         "report_limits": {
             "maximum_statistic_rows": report_max_statistic_rows,
@@ -1441,6 +1684,14 @@ def _build_resource(
             (
                 "Matched non-focus controls reduce measured structural confounding but "
                 "cannot remove unmeasured biological or annotation confounding."
+            ),
+            (
+                "RNA-seq mappings are exact and species scoped. Unmapped, ambiguous and "
+                "unmeasured proteins are unavailable evidence, not measured zero expression."
+            ),
+            (
+                "Expression units are never mixed within an experiment: TPM is preferred "
+                "when present and FPKM is used only as an explicit fallback."
             ),
         ],
     }
@@ -2866,6 +3117,8 @@ def _build_source_inventory(
     alignment_dir: Path | None,
     focus_proteins_path: Path | None = None,
     benchmark_proteins_path: Path | None = None,
+    expression_authority: ExpressionAuthority | None = None,
+    expression_aliases_path: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Checksum every source that can alter the requested analytical result.
 
@@ -2874,6 +3127,8 @@ def _build_source_inventory(
         alignment_dir: Optional alignment authority.
         focus_proteins_path: Optional E3/focus selection authority.
         benchmark_proteins_path: Optional housekeeping/R marker authority.
+        expression_authority: Optional verified Expression Atlas authority.
+        expression_aliases_path: Optional reviewed exact-alias authority.
 
     Returns:
         Complete input file inventory in deterministic role/path order.
@@ -2905,10 +3160,24 @@ def _build_source_inventory(
         roles.append(("focus_protein_authority", focus_proteins_path))
     if benchmark_proteins_path is not None:
         roles.append(("dispersion_benchmark_authority", benchmark_proteins_path))
+    if expression_authority is not None:
+        roles.append(("expression_resource_manifest", expression_authority.manifest_path))
+    if expression_aliases_path is not None:
+        roles.append(("expression_reviewed_aliases", expression_aliases_path))
     records = []
     for role, path in roles:
         record = file_record(path=path)
         records.append({"role": role, **record})
+    if expression_authority is not None:
+        records.extend(
+            {
+                "role": f"expression:{record.resource_type}",
+                "path": str(record.path),
+                "size_bytes": record.path.stat().st_size,
+                "sha256": record.sha256,
+            }
+            for record in expression_authority.records
+        )
     return records
 
 
@@ -3292,6 +3561,12 @@ def _validate_controls(
     benchmark_enabled: bool = False,
     benchmark_controls_per_group: int = 3,
     benchmark_bootstrap_resamples: int = 1_000,
+    expression_enabled: bool = False,
+    expression_aliases_enabled: bool = False,
+    expression_minimum_value: float = 0.5,
+    expression_broad_fraction: float = 0.5,
+    expression_threads: int = 4,
+    expression_memory_mb: int = 8_192,
 ) -> None:
     """Validate named execution controls before filesystem mutation.
 
@@ -3314,6 +3589,12 @@ def _validate_controls(
         benchmark_enabled: Whether matched-background benchmarking is enabled.
         benchmark_controls_per_group: Unique controls selected per target.
         benchmark_bootstrap_resamples: Deterministic confidence-interval iterations.
+        expression_enabled: Whether RNA-seq evidence is requested.
+        expression_aliases_enabled: Whether a reviewed alias TSV was supplied.
+        expression_minimum_value: Minimum positive expression value.
+        expression_broad_fraction: Positive-context fraction called broad.
+        expression_threads: Maximum expression integration threads.
+        expression_memory_mb: Expression integration memory bound in MiB.
 
     Raises:
         InputValidationError: If any controls are unsafe or inconsistent.
@@ -3374,6 +3655,26 @@ def _validate_controls(
             raise InputValidationError(
                 "benchmark_bootstrap_resamples must be between 100 and 100,000."
             )
+    if expression_aliases_enabled and not expression_enabled:
+        raise InputValidationError(
+            "An expression alias authority requires an expression resource manifest."
+        )
+    if not math.isfinite(expression_minimum_value) or expression_minimum_value < 0:
+        raise InputValidationError(
+            "expression_minimum_value must be finite and non-negative."
+        )
+    if not math.isfinite(expression_broad_fraction) or not (
+        0 <= expression_broad_fraction <= 1
+    ):
+        raise InputValidationError(
+            "expression_broad_fraction must be between zero and one."
+        )
+    if not 1 <= expression_threads <= 256:
+        raise InputValidationError("expression_threads must be between 1 and 256.")
+    if not 256 <= expression_memory_mb <= 1_048_576:
+        raise InputValidationError(
+            "expression_memory_mb must be between 256 and 1,048,576."
+        )
     _validate_report_controls(
         report_max_statistic_rows=report_max_statistic_rows,
         report_max_groups=report_max_groups,

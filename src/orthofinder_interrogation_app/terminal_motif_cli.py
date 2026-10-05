@@ -19,7 +19,14 @@ from orthofinder_results.io_utils import configure_logging
 from orthofinder_results.parsers import iter_sequence_ids, read_species_ids
 
 _LOGGER = logging.getLogger("orthofinder_interrogation_app.terminal_motif_cli")
-_FIELDS = ("internal_id", "species_label", "member_id", "sequence")
+_FIELDS = (
+    "internal_id",
+    "species_label",
+    "source_fasta",
+    "member_id",
+    "raw_header",
+    "sequence",
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -87,7 +94,9 @@ def build_sequence_sidecar(*, results_dir: Path, output_path: Path) -> int:
         {
             "internal_id": internal_id,
             "species_label": str(by_internal[internal_id]["species_label"]),
+            "source_fasta": str(by_internal[internal_id]["source_fasta"]),
             "member_id": str(by_internal[internal_id]["member_id"]),
+            "raw_header": str(by_internal[internal_id]["raw_header"]),
             "sequence": sequences[internal_id].upper().rstrip("*"),
         }
         for internal_id in sorted(by_internal)

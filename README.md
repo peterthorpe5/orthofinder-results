@@ -249,9 +249,10 @@ distribution for each candidate HOG. The motif page intentionally remains in a c
 labelled setup state until the sequence sidecar is supplied.
 The dedicated page defaults to terminal asparagine and an 80% matching threshold,
 while accepting any exact canonical amino-acid suffix, required focal species and
-minimum species breadth. A compact sequence Parquet is built once from the same
-OrthoFinder `SequenceIDs.txt` and `Species*.fa` authorities; the completed schema-4
-resource is not rebuilt or modified. Every analytical page now
+minimum species breadth. Version 0.11.0 extends this to original orthogroups and
+explicitly enabled regular expressions either anywhere in the sequence or anchored at
+the C-terminus. New schema-5 resources embed the compact sequence Parquet built from
+the same OrthoFinder `SequenceIDs.txt` and `Species*.fa` authorities. Every analytical page
 has a result-led interpretation dropdown, and each graph explanation includes common
 result patterns plus the quantitative view that should be checked next. Dedicated
 **Methods & provenance** and searchable **Glossary** pages explain the complete route
@@ -261,8 +262,14 @@ generation uses Kaleido and a compatible Chrome or Chromium installation; the Ma
 will normally discover Google Chrome automatically. The draggable network additionally
 has a self-contained HTML download because a static PDF cannot retain interaction.
 
-No schema-4 resource, benchmark statistic, Slurm workflow or 1.5-GiB completed resource
-is changed by this release.
+Schema 5 also adds generic checksum-bound Expression Atlas evidence. Exact identifiers
+are matched only within species; unique, ambiguous and unmapped states remain separate.
+TPM is preferred separately for each species and experiment, FPKM is used only when TPM
+is absent, and units are never pooled. The motif page adds transcript-context heatmaps
+and cross-species UpSet intersections. These support candidate prioritisation but do not
+measure Cereblon-dependent protein accumulation.
+See the [motif and RNA-seq evidence guide](docs/motif_expression.md) for the complete
+denominators, mapping policy, heatmap and UpSet interpretation, and safe replacement plan.
 
 ## Interactive application
 
@@ -278,9 +285,8 @@ orthofinder-interrogation-app \
   --resource-dir /path/to/completed/resource
 ```
 
-For complete-proteome C-terminal motif discovery, build one compressed sequence
-sidecar from the same completed OrthoFinder run. This does not rerun OrthoFinder,
-the dispersion benchmark or the 1.5-GiB resource build:
+For older resources, complete-proteome motif discovery can still use one compressed
+sequence sidecar from the same completed OrthoFinder run:
 
 ```bash
 orthofinder-terminal-motif-build \
@@ -298,6 +304,27 @@ defaults to motif `N`, an 80% protein-level threshold and root HOGs at `N0`, but
 accepts any canonical suffix up to 100 residues, minimum species breadth and
 required focal species. Results include paired TSV/Excel tables, plot PDF and
 selected-HOG FASTA.
+
+New schema-5 resources built with `--include-protein-sequences` are self-contained;
+the launcher discovers `evidence/protein_sequences.parquet` automatically. Add the
+corrected Expression Atlas authority during construction with:
+
+```bash
+orthofinder-results \
+  --action dispersion-benchmark \
+  --results-dir /path/to/Results_Feb26 \
+  --run-id results_feb26_motif_expression_v0_11_0 \
+  --output-dir /path/to/new_completed_resource \
+  --expression-manifest /path/to/e3_workflow_expression_resources.tsv \
+  --include-protein-sequences
+```
+
+The builder verifies each manifest checksum once before mutation, records the verified
+digests in provenance, and then scans only expression partitions whose exact species
+occur in the OrthoFinder run. The local viewer does not rehash the full expression
+authority on widget changes. Resource identity and low-cardinality selectors are cached,
+result views are evaluated lazily, and TSV, Excel and PDF payloads are generated only
+when requested.
 
 The launcher validates the manifest, schema, run identity and required DuckDB
 relations before starting a local Streamlit server. Every database query is
@@ -373,6 +400,9 @@ The application provides:
 - a generic **Selection coverage tree** that combines exact, clade, only-in and
   exclusion predicates, evaluates E3-focus clusters by default, keeps selection
   state separate from dataset coverage, and exports a reconciled audit package;
+- a **Protein motif conservation** page supporting exact C-terminal suffixes and
+  opt-in regex searches, HOG or original-orthogroup authorities, reviewed taxonomic
+  denominators, complete protein/FASTA audits and schema-5 RNA-seq heatmap and UpSet views;
 - and a three-part expandable guide beside every graph describing what it shows,
   how to interpret it and its most important limitation.
 
@@ -754,11 +784,10 @@ retained in a new schema-3 bounded tree calculation. If a schema-2 pilot matrix
 omitted that protein, the app reports the limitation because the immutable
 sample cannot be enlarged without a portable gene tree.
 
-E3-ligase ranking, expression, experimental evidence, structures, conserved
-ligandable pockets and chemistry starting points remain in the separate E3
-application. A later versioned link contract can connect an exact composite
-OrthoFinder group identity to that evidence without building E3-specific
-assumptions into this reusable package.
+E3-specific ranking, experimental evidence, structures, conserved ligandable pockets
+and chemistry starting points remain in the separate E3 application. Schema 5 imports
+only generic species-scoped RNA-seq context evidence into this reusable package; it does
+not import E3-specific scores or assume that any motif-defined group is a Cereblon target.
 
 ## Development quality gate
 

@@ -52,24 +52,25 @@ class MethodStep:
 
 PAGE_GUIDANCE = {
     "terminal_motif": PageGuidance(
-        title="C-terminal motif conservation",
+        title="Protein motif conservation and expression",
         purpose=(
-            "Identifies HOGs whose sequence-bearing proteins share an exact user-defined "
-            "C-terminal amino-acid motif across multiple species."
+            "Identifies HOGs or original orthogroups whose sequence-bearing proteins share "
+            "an exact C-terminal amino-acid motif or an explicitly enabled regular expression."
         ),
         results=(
-            "Each result reports protein-level matching fraction, represented-species "
-            "breadth, reviewed focal-lineage coverage and the species containing at least "
-            "one matching protein."
+            "Results report protein- and species-level conservation, missing sequence "
+            "coverage, reviewed taxonomic breadth and, in schema-5 resources, exact "
+            "species-scoped RNA-seq mapping and biological-context evidence."
         ),
         read_order=(
-            "First load the sequence sidecar. Set the exact motif, choose a reviewed focal "
-            "lineage and any required comparison lineages, inspect passing HOGs, then verify "
-            "the species and protein-level calls."
+            "Define the exact suffix or explicitly enable regex, choose the group system and "
+            "primary lineage, inspect candidate groups and taxonomic calls, then review "
+            "protein identifiers, RNA-seq heatmaps and species intersections."
         ),
         caution=(
-            "A conserved terminus and HOG membership are candidate evidence only. They do "
-            "not demonstrate Cereblon binding, ubiquitination, altered abundance or degradation."
+            "Sequence conservation and RNA-seq provide candidate and biological-context "
+            "evidence only. They do not demonstrate Cereblon binding, ubiquitination, "
+            "protein accumulation or degradation."
         ),
     ),
     "overview": PageGuidance(
@@ -326,15 +327,17 @@ PAGE_GUIDANCE = {
 GLOSSARY_ENTRIES = (
     GlossaryEntry(
         "C-terminal motif",
-        "Groups and proteins",
-        "An exact amino-acid sequence at the carboxyl end of a protein.",
-        "A match is a sequence observation, not proof of Cereblon recognition or degradation.",
-        "Terminal asparagine; motif matching fraction; sequence sidecar",
+        "Sequence and expression",
+        "One or more amino-acid residues required at the final position of an assessed protein.",
+        "The default exact motif is terminal asparagine (N); a match is sequence evidence, "
+        "not proof of Cereblon recognition or degradation.",
+        "Regular expression; motif matching fraction; sequence sidecar",
     ),
     GlossaryEntry(
         "Motif matching fraction",
         "Groups and proteins",
-        "The proportion of sequence-bearing proteins in a HOG ending with the exact motif.",
+        "The proportion of assessed primary-set proteins in a selected group matching the "
+        "active exact suffix or regular expression.",
         "Read it with represented and matching species because paralogue expansions can dominate.",
         "C-terminal motif; matching species; HOG",
     ),
@@ -342,16 +345,16 @@ GLOSSARY_ENTRIES = (
         "Focal-lineage motif coverage",
         "Taxonomy and coverage",
         "The proportion of represented reviewed descendants in the selected lineage that "
-        "contain at least one protein ending with the exact motif.",
+        "contain at least one protein matching the active sequence search.",
         "The denominator is represented sampled descendants, not every species known to science.",
         "C-terminal motif; reviewed taxonomy; matching species",
     ),
     GlossaryEntry(
         "Sequence sidecar",
         "Data and provenance",
-        "A compressed Parquet companion containing reconciled complete-proteome sequences.",
-        "It is built from the same OrthoFinder identifiers and FASTA files without "
-        "altering the resource.",
+        "A compressed Parquet authority containing reconciled complete-proteome sequences.",
+        "Schema-5 resources embed it; older resources can use a companion built from the "
+        "same OrthoFinder identifiers and FASTA files.",
         "SequenceIDs.txt; immutable resource; C-terminal motif",
     ),
     GlossaryEntry(
@@ -1133,6 +1136,84 @@ GLOSSARY_ENTRIES = (
         "Resolved gene tree; provenance",
     ),
     GlossaryEntry(
+        "Expression Atlas",
+        "Sequence and expression",
+        "A public source of normalised expression matrices and experiment metadata used "
+        "as the checksum-bound RNA-seq authority in schema-5 resources.",
+        "The app displays only included, verified partitions whose exact species labels "
+        "occur in the OrthoFinder run.",
+        "RNA-seq expression context; TPM; FPKM",
+    ),
+    GlossaryEntry(
+        "Expression heatmap",
+        "Sequence and expression",
+        "A matrix of median mapped-member expression for selected groups across species "
+        "and biological contexts.",
+        "Colour compares values only within one selected unit; blank cells mean unavailable "
+        "evidence rather than measured zero.",
+        "RNA-seq expression context; TPM; unavailable",
+    ),
+    GlossaryEntry(
+        "FPKM",
+        "Sequence and expression",
+        "Fragments per kilobase of transcript per million mapped fragments, an RNA-seq "
+        "normalisation unit.",
+        "It is used only when TPM is absent for that exact species and experiment, and is "
+        "never pooled numerically with TPM.",
+        "TPM; expression unit",
+    ),
+    GlossaryEntry(
+        "Measured zero expression",
+        "Sequence and expression",
+        "An included expression context with a valid reported numerical value of zero.",
+        "It differs from an unmapped protein, ambiguous mapping, absent experiment or "
+        "missing value; those states remain unavailable.",
+        "Unavailable; RNA-seq expression context; mapping status",
+    ),
+    GlossaryEntry(
+        "Regular expression",
+        "Sequence and expression",
+        "A formally specified sequence pattern that can match amino-acid residues anywhere "
+        "in a protein or only at its C-terminus.",
+        "Regex mode is off by default and must be enabled explicitly; review member-level "
+        "matched fragments before interpreting a group.",
+        "C-terminal motif; exact suffix",
+    ),
+    GlossaryEntry(
+        "RNA-seq expression context",
+        "Sequence and expression",
+        "One Expression Atlas species, experiment and sample or condition record joined to "
+        "its tissue, developmental-stage and condition metadata.",
+        "It identifies where transcript evidence was observed; it is not a protein-abundance "
+        "or Cereblon-substrate measurement.",
+        "Expression Atlas; expression heatmap; measured zero expression",
+    ),
+    GlossaryEntry(
+        "Species-scoped exact mapping",
+        "Sequence and expression",
+        "A case-insensitive exact identifier or gene-name match made only within the same "
+        "declared species.",
+        "One best-tier gene is MAPPED_UNIQUE; multiple genes are AMBIGUOUS and no gene is "
+        "NOT_MAPPED. Ambiguous and absent mappings are never guessed.",
+        "Mapping status; unavailable; provenance",
+    ),
+    GlossaryEntry(
+        "TPM",
+        "Sequence and expression",
+        "Transcripts per million, a within-sample RNA-seq abundance normalisation unit.",
+        "TPM is preferred over FPKM separately for each species and experiment; comparisons "
+        "still require awareness of experiment and tissue differences.",
+        "FPKM; RNA-seq expression context",
+    ),
+    GlossaryEntry(
+        "UpSet plot",
+        "Sequence and expression",
+        "A bar chart and membership matrix showing exact intersections among several sets.",
+        "Here each set is a species with observed RNA-seq evidence for a selected group; "
+        "the bar height is the number of groups in that exact species combination.",
+        "Expression heatmap; represented species; unavailable",
+    ),
+    GlossaryEntry(
         "Viewer version",
         "Data and provenance",
         "The installed application/package release presenting an immutable resource.",
@@ -1314,23 +1395,43 @@ METHOD_STEPS = (
     ),
     MethodStep(
         13,
-        "Complete-proteome terminal-motif authority",
+        "Complete-proteome motif authority",
         (
-            "The optional sequence-sidecar builder reconciles SequenceIDs.txt against every "
-            "Species*.fa record from the same completed OrthoFinder run and stores each full "
-            "protein sequence once in compressed Parquet. The viewer joins these sequences to "
-            "HOG membership, tests exact user-defined C-terminal suffixes and intersects the "
-            "observed species with the reviewed taxonomy authority."
+            "The resource builder reconciles SequenceIDs.txt against every Species*.fa "
+            "record from the same completed OrthoFinder run and stores each full protein "
+            "sequence once in compressed Parquet. The viewer joins these sequences to HOG "
+            "or original-orthogroup membership and tests an exact C-terminal suffix or an "
+            "explicitly enabled regular expression anywhere or at the C-terminus."
         ),
-        "A separate one-sequence-per-protein authority supports flexible motifs without "
-        "duplicating sequences across HOG hierarchy levels or rebuilding the formal resource.",
-        "Atomic sequence Parquet, protein-level calls, lineage-aware HOG conservation "
-        "summaries and exports.",
-        "Terminal conservation prioritises candidates; Cereblon recognition and degradation "
-        "must be established experimentally.",
+        "A one-sequence-per-protein authority supports flexible searches without duplicating "
+        "sequences across hierarchy levels, and explicit regex activation prevents an exact "
+        "motif from being reinterpreted silently.",
+        "Embedded atomic sequence Parquet, protein-level calls, taxonomic conservation "
+        "summaries, FASTA and table exports.",
+        "Sequence-pattern conservation prioritises candidates; Cereblon recognition and "
+        "degradation must be established experimentally.",
     ),
     MethodStep(
         14,
+        "Species-scoped RNA-seq evidence",
+        (
+            "The builder verifies the corrected Expression Atlas resource manifest and every "
+            "included Parquet checksum, derives exact member aliases from SequenceIDs.txt and "
+            "optional reviewed aliases, and maps identifiers only within an exact species. "
+            "TPM is selected when available for each species and experiment, otherwise FPKM; "
+            "the units are never pooled. Expression contexts are joined to tissue, stage and "
+            "condition metadata and summarised for proteins and every group authority."
+        ),
+        "Species scoping prevents cross-species identifier collisions, unit selection avoids "
+        "mixing incomparable abundance scales, and explicit mapping states preserve the "
+        "difference between missing evidence and measured zero.",
+        "Audited aliases, unique/ambiguous/unmapped protein mappings, context-level evidence, "
+        "group summaries, heatmaps, UpSet intersections and exact downloads.",
+        "RNA-seq measures transcript context, not protein accumulation. It can prioritise "
+        "western-blot candidates but cannot demonstrate Cereblon-dependent degradation.",
+    ),
+    MethodStep(
+        15,
         "Immutable publication and read-only interrogation",
         (
             "The pipeline published compressed TSV, typed Parquet, DuckDB, manifest, QC "
@@ -1521,6 +1622,13 @@ def resource_method_records(*, resource: ResourceIdentity) -> tuple[dict[str, st
         "benchmark_individual_comparisons",
         "benchmark_cluster_classifications",
     }
+    expression_relations = {
+        "expression_member_mapping",
+        "expression_member_summary",
+        "expression_context",
+        "expression_group_summary",
+        "expression_import_audit",
+    }
     values = (
         (
             "Run ID",
@@ -1561,6 +1669,11 @@ def resource_method_records(*, resource: ResourceIdentity) -> tuple[dict[str, st
             "Calibrated dispersion relations",
             "Available" if benchmark_relations.issubset(resource.relations) else "Unavailable",
             "Determines whether profile contrasts and individual calibration can be shown.",
+        ),
+        (
+            "RNA-seq expression relations",
+            "Available" if expression_relations.issubset(resource.relations) else "Unavailable",
+            "Determines whether member mappings, context heatmaps and UpSet views can be shown.",
         ),
         (
             "Application access",

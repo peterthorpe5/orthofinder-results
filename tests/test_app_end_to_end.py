@@ -172,10 +172,81 @@ def test_terminal_motif_route_explains_missing_sequence_sidecar(
     test.sidebar.radio[0].set_value("C-terminal motif conservation")
     test.run()
     assert not test.exception
-    assert any(header.value == "C-terminal motif conservation" for header in test.header)
-    assert any("No HOG motif analysis" in item.value for item in test.warning)
+    assert any(header.value == "Protein motif conservation" for header in test.header)
+    assert any("No group motif analysis" in item.value for item in test.warning)
     assert any("One-time setup" == item.value for item in test.subheader)
     assert any("orthofinder-terminal-motif-build" in item.value for item in test.code)
+
+
+def test_terminal_motif_route_rejects_invalid_and_empty_searches(
+    application_resource: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Invalid sidecars, invalid motifs and zero-result searches remain visible."""
+
+    invalid_sidecar = tmp_path / "invalid.parquet"
+    invalid_sidecar.write_text("not Parquet", encoding="utf-8")
+    monkeypatch.setenv(TERMINAL_MOTIF_ENVIRONMENT_VARIABLE, str(invalid_sidecar))
+    test = _application_test(
+        application_resource=application_resource,
+        monkeypatch=monkeypatch,
+    )
+    test.sidebar.radio[0].set_value("C-terminal motif conservation")
+    test.run()
+    assert not test.exception
+    assert any("not readable Parquet" in item.value for item in test.error)
+
+    sidecar = tmp_path / "terminal_sequences.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "internal_id": "0_0",
+                    "species_label": "Species_A",
+                    "member_id": "alpha_1",
+                    "sequence": "MAAN",
+                },
+                {
+                    "internal_id": "0_1",
+                    "species_label": "Species_A",
+                    "member_id": "alpha_2",
+                    "sequence": "MQQN",
+                },
+                {
+                    "internal_id": "1_0",
+                    "species_label": "Species_B",
+                    "member_id": "beta_1",
+                    "sequence": "MTTN",
+                },
+            ]
+        ),
+        sidecar,
+        compression="zstd",
+    )
+    monkeypatch.setenv(TERMINAL_MOTIF_ENVIRONMENT_VARIABLE, str(sidecar))
+    monkeypatch.setattr(terminal_motif_page, "_load_taxonomy", lambda **_kwargs: None)
+    test = _application_test(
+        application_resource=application_resource,
+        monkeypatch=monkeypatch,
+    )
+    test.sidebar.radio[0].set_value("C-terminal motif conservation")
+    test.run()
+    exact_input = next(
+        item for item in test.text_input if item.label == "Exact C-terminal sequence"
+    )
+    exact_input.set_value("X")
+    test.run()
+    assert not test.exception
+    assert any("canonical one-letter" in item.value for item in test.error)
+
+    exact_input = next(
+        item for item in test.text_input if item.label == "Exact C-terminal sequence"
+    )
+    exact_input.set_value("W")
+    test.run()
+    assert not test.exception
+    assert any("No group passes" in item.value for item in test.warning)
 
 
 def test_terminal_motif_route_renders_complete_results_and_downloads(
@@ -253,12 +324,101 @@ def test_terminal_motif_route_renders_complete_results_and_downloads(
     assert any(subheader.value == "Conservation landscape" for subheader in test.subheader)
     assert any(subheader.value == "Taxonomic conservation filters" for subheader in test.subheader)
     assert any(
-        subheader.value == "Taxonomic distribution of the selected HOG"
+        metric.label == "Qualifying groups" and metric.value == "1"
+        for metric in test.metric
+    )
+    result_view = next(item for item in test.radio if item.label == "Result view")
+    assert len(test.dataframe) >= 1
+    assert len(test.get("download_button")) >= 3
+
+    result_view.set_value("Taxonomic matrix")
+    test.run()
+    assert not test.exception
+    assert any(
+        subheader.value == "Group-by-species conservation matrix"
         for subheader in test.subheader
     )
-    assert any(metric.label == "Passing HOGs" and metric.value == "1" for metric in test.metric)
+    assert test.get("plotly_chart")
+    assert len(test.get("download_button")) >= 1
+
+    result_view = next(item for item in test.radio if item.label == "Result view")
+    result_view.set_value("Inspect one group")
+    test.run()
+    assert not test.exception
+    assert any(subheader.value == "Inspect one group" for subheader in test.subheader)
+    assert any(markdown.value == "#### Species evidence" for markdown in test.markdown)
     assert len(test.dataframe) >= 2
     assert len(test.get("download_button")) >= 6
+
+
+def test_terminal_motif_route_renders_expression_heatmap_and_upset(
+    expression_application_resource: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A schema-5 resource exposes lazy RNA-seq heatmap and UpSet downloads."""
+
+    sidecar = tmp_path / "terminal_sequences.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "internal_id": "0_0",
+                    "species_label": "Species_A",
+                    "member_id": "alpha_1",
+                    "sequence": "MAAN",
+                },
+                {
+                    "internal_id": "0_1",
+                    "species_label": "Species_A",
+                    "member_id": "alpha_2",
+                    "sequence": "MQQN",
+                },
+                {
+                    "internal_id": "1_0",
+                    "species_label": "Species_B",
+                    "member_id": "beta_1",
+                    "sequence": "MTTN",
+                },
+            ]
+        ),
+        sidecar,
+        compression="zstd",
+    )
+    monkeypatch.setenv(TERMINAL_MOTIF_ENVIRONMENT_VARIABLE, str(sidecar))
+    monkeypatch.setattr(terminal_motif_page, "_load_taxonomy", lambda **_kwargs: None)
+    test = _application_test(
+        application_resource=expression_application_resource,
+        monkeypatch=monkeypatch,
+    )
+    test.sidebar.radio[0].set_value("C-terminal motif conservation")
+    test.run()
+    assert not test.exception
+    result_view = next(item for item in test.radio if item.label == "Result view")
+    assert "RNA-seq expression" in result_view.options
+    result_view.set_value("RNA-seq expression")
+    test.run()
+    assert not test.exception
+    assert any(
+        subheader.value == "RNA-seq expression evidence" for subheader in test.subheader
+    )
+    assert any(
+        markdown.value == "#### Cross-species expression heatmap"
+        for markdown in test.markdown
+    )
+    assert len(test.get("plotly_chart")) >= 2
+    assert len(test.dataframe) >= 4
+    assert len(test.get("download_button")) >= 10
+
+    result_view = next(item for item in test.radio if item.label == "Result view")
+    result_view.set_value("Inspect one group")
+    test.run()
+    assert not test.exception
+    assert any(
+        markdown.value == "#### RNA-seq mapping and expression status"
+        for markdown in test.markdown
+    )
+    assert len(test.dataframe) >= 3
 
 
 def test_dispersion_benchmark_route_renders_complete_inference(

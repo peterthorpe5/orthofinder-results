@@ -2,18 +2,19 @@
 set -Eeuo pipefail
 
 usage() {
-    echo "Usage: $0 PACKAGE_ROOT CONDA_ENV RESULTS_DIR FOCUS_OR_DASH BENCHMARK_OR_DASH RUN_ID PERSISTENT_OUTPUT [safe analysis options]" >&2
+    echo "Usage: $0 PACKAGE_ROOT CONDA_ENV RESULTS_DIR FOCUS_OR_DASH BENCHMARK_OR_DASH EXPRESSION_MANIFEST_OR_DASH RUN_ID PERSISTENT_OUTPUT [safe analysis options]" >&2
 }
 
-[[ $# -ge 7 ]] || { usage; exit 2; }
+[[ $# -ge 8 ]] || { usage; exit 2; }
 PACKAGE_ROOT=$1
 CONDA_ENV=$2
 RESULTS_SOURCE=$3
 FOCUS_SOURCE=$4
 BENCHMARK_SOURCE=$5
-RUN_ID=$6
-PERSISTENT_OUTPUT=$7
-shift 7
+EXPRESSION_MANIFEST_SOURCE=$6
+RUN_ID=$7
+PERSISTENT_OUTPUT=$8
+shift 8
 
 [[ -x "$PACKAGE_ROOT/run_orthofinder_results.sh" ]] || {
     echo "ERROR: package runner is not executable: $PACKAGE_ROOT/run_orthofinder_results.sh" >&2
@@ -31,6 +32,10 @@ shift 7
     echo "ERROR: dispersion-marker authority is unavailable: $BENCHMARK_SOURCE" >&2
     exit 2
 }
+[[ "$EXPRESSION_MANIFEST_SOURCE" == "-" || -f "$EXPRESSION_MANIFEST_SOURCE" ]] || {
+    echo "ERROR: expression-resource manifest is unavailable: $EXPRESSION_MANIFEST_SOURCE" >&2
+    exit 2
+}
 [[ "$RUN_ID" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || {
     echo "ERROR: run ID contains unsupported characters: $RUN_ID" >&2
     exit 2
@@ -41,6 +46,9 @@ for argument in "$@"; do
         --action|--action=*|--results-dir|--results-dir=*|--output-dir|--output-dir=*|\
         --run-id|--run-id=*|--work-dir|--work-dir=*|--focus-proteins|\
         --focus-proteins=*|--benchmark-proteins|--benchmark-proteins=*|\
+        --expression-manifest|--expression-manifest=*|--expression-aliases|\
+        --expression-aliases=*|--expression-threads|--expression-threads=*|\
+        --expression-memory-mb|--expression-memory-mb=*|--include-protein-sequences|\
         --alignment-dir|--alignment-dir=*|--distance-source|--distance-source=*|\
         --distance-group-type|--distance-group-type=*|--distance-hierarchy-node|\
         --distance-hierarchy-node=*|--distance-max-groups|--distance-max-groups=*|\
@@ -137,9 +145,9 @@ if [[ "$FOCUS_SOURCE" == "-" ]]; then
         echo "ERROR: packaged E3 seed catalogue is unavailable: $BUNDLED_FOCUS" >&2
         exit 2
     }
-    cp -- "$BUNDLED_FOCUS" "$FOCUS_STAGE"
+    cp "$BUNDLED_FOCUS" "$FOCUS_STAGE"
 else
-    cp -- "$FOCUS_SOURCE" "$FOCUS_STAGE"
+    cp "$FOCUS_SOURCE" "$FOCUS_STAGE"
 fi
 
 BENCHMARK_STAGE="$JOB_WORK_DIR/arabidopsis_dispersion_benchmarks.tsv"
@@ -149,9 +157,26 @@ if [[ "$BENCHMARK_SOURCE" == "-" ]]; then
         echo "ERROR: packaged dispersion-marker authority is unavailable: $BUNDLED_BENCHMARK" >&2
         exit 2
     }
-    cp -- "$BUNDLED_BENCHMARK" "$BENCHMARK_STAGE"
+    cp "$BUNDLED_BENCHMARK" "$BENCHMARK_STAGE"
 else
-    cp -- "$BENCHMARK_SOURCE" "$BENCHMARK_STAGE"
+    cp "$BENCHMARK_SOURCE" "$BENCHMARK_STAGE"
+fi
+
+EXPRESSION_ARGUMENTS=(--include-protein-sequences)
+if [[ "$EXPRESSION_MANIFEST_SOURCE" != "-" ]]; then
+    EXPRESSION_MANIFEST_STAGE="$JOB_WORK_DIR/expression_resources.tsv"
+    cp "$EXPRESSION_MANIFEST_SOURCE" "$EXPRESSION_MANIFEST_STAGE"
+    EXPRESSION_MEMORY_MB=${ORTHOFINDER_EXPRESSION_MEMORY_MB:-8192}
+    [[ "$EXPRESSION_MEMORY_MB" =~ ^[0-9]+$ ]] && \
+        [[ "$EXPRESSION_MEMORY_MB" -ge 256 ]] || {
+        echo "ERROR: ORTHOFINDER_EXPRESSION_MEMORY_MB must be at least 256 MiB." >&2
+        exit 2
+    }
+    EXPRESSION_ARGUMENTS+=(
+        --expression-manifest "$EXPRESSION_MANIFEST_STAGE"
+        --expression-threads "${SLURM_CPUS_PER_TASK:-4}"
+        --expression-memory-mb "$EXPRESSION_MEMORY_MB"
+    )
 fi
 
 PIPELINE_WORK="$JOB_WORK_DIR/pipeline_work"
@@ -165,6 +190,7 @@ PIPELINE_WORK="$JOB_WORK_DIR/pipeline_work"
     --run-id "$RUN_ID" \
     --output-dir "$PERSISTENT_OUTPUT" \
     --work-dir "$PIPELINE_WORK" \
+    "${EXPRESSION_ARGUMENTS[@]}" \
     "$@"
 
 [[ -f "$PERSISTENT_OUTPUT/run_manifest.json" ]] || {
@@ -187,6 +213,7 @@ for required_file in \
     tables/benchmark_individual_comparisons.tsv.gz \
     tables/benchmark_cluster_classifications.tsv.gz \
     tables/pairwise_distances.tsv.gz \
+    evidence/protein_sequences.parquet \
     duckdb/orthofinder_results.duckdb \
     qc/validation_checks.tsv; do
     [[ -s "$PERSISTENT_OUTPUT/$required_file" ]] || {
@@ -194,6 +221,20 @@ for required_file in \
         exit 2
     }
 done
+if [[ "$EXPRESSION_MANIFEST_SOURCE" != "-" ]]; then
+    for required_file in \
+        tables/expression_identifier_aliases.tsv.gz \
+        tables/expression_member_mapping.tsv.gz \
+        tables/expression_member_summary.tsv.gz \
+        tables/expression_context.tsv.gz \
+        tables/expression_group_summary.tsv.gz \
+        tables/expression_import_audit.tsv.gz; do
+        [[ -s "$PERSISTENT_OUTPUT/$required_file" ]] || {
+            echo "ERROR: published resource lacks required RNA-seq output: $required_file" >&2
+            exit 2
+        }
+    done
+fi
 gzip -t \
     "$PERSISTENT_OUTPUT/tables/e3_cluster_results.tsv.gz" \
     "$PERSISTENT_OUTPUT/tables/benchmark_marker_audit.tsv.gz" \
@@ -205,6 +246,15 @@ gzip -t \
     "$PERSISTENT_OUTPUT/tables/benchmark_individual_comparisons.tsv.gz" \
     "$PERSISTENT_OUTPUT/tables/benchmark_cluster_classifications.tsv.gz" \
     "$PERSISTENT_OUTPUT/tables/pairwise_distances.tsv.gz"
+if [[ "$EXPRESSION_MANIFEST_SOURCE" != "-" ]]; then
+    gzip -t \
+        "$PERSISTENT_OUTPUT/tables/expression_identifier_aliases.tsv.gz" \
+        "$PERSISTENT_OUTPUT/tables/expression_member_mapping.tsv.gz" \
+        "$PERSISTENT_OUTPUT/tables/expression_member_summary.tsv.gz" \
+        "$PERSISTENT_OUTPUT/tables/expression_context.tsv.gz" \
+        "$PERSISTENT_OUTPUT/tables/expression_group_summary.tsv.gz" \
+        "$PERSISTENT_OUTPUT/tables/expression_import_audit.tsv.gz"
+fi
 
 rmdir "$PUBLISH_LOCK"
 PUBLISH_LOCK=""
@@ -213,6 +263,11 @@ echo "Validated completed matched-background dispersion resource: $PERSISTENT_OU
 echo "Cluster statistics: $PERSISTENT_OUTPUT/tables/benchmark_cluster_results.tsv.gz"
 echo "Profile contrasts: $PERSISTENT_OUTPUT/tables/benchmark_contrasts.tsv.gz"
 echo "Individual comparisons: $PERSISTENT_OUTPUT/tables/benchmark_individual_comparisons.tsv.gz"
+echo "Protein sequence evidence: $PERSISTENT_OUTPUT/evidence/protein_sequences.parquet"
+if [[ "$EXPRESSION_MANIFEST_SOURCE" != "-" ]]; then
+    echo "RNA-seq contexts: $PERSISTENT_OUTPUT/tables/expression_context.tsv.gz"
+    echo "RNA-seq group summary: $PERSISTENT_OUTPUT/tables/expression_group_summary.tsv.gz"
+fi
 checksum_file "$PERSISTENT_OUTPUT/tables/benchmark_cluster_results.tsv.gz"
 checksum_file "$PERSISTENT_OUTPUT/tables/benchmark_contrasts.tsv.gz"
 checksum_file "$PERSISTENT_OUTPUT/run_manifest.json"

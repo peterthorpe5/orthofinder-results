@@ -169,6 +169,34 @@ def build_parser() -> argparse.ArgumentParser:
         default=1_000,
         help="Deterministic bootstrap iterations for median-difference intervals.",
     )
+    parser.add_argument(
+        "--expression-manifest",
+        type=Path,
+        help=(
+            "Checksum-bound Expression Atlas resource manifest. When supplied, the "
+            "completed resource includes generic member, group and context evidence."
+        ),
+    )
+    parser.add_argument(
+        "--expression-aliases",
+        type=Path,
+        help=(
+            "Optional reviewed species/member exact-alias TSV used in addition to "
+            "identifiers parsed from SequenceIDs.txt."
+        ),
+    )
+    parser.add_argument("--expression-minimum-value", type=float, default=0.5)
+    parser.add_argument("--expression-broad-fraction", type=float, default=0.5)
+    parser.add_argument("--expression-threads", type=int, default=4)
+    parser.add_argument("--expression-memory-mb", type=int, default=8192)
+    parser.add_argument(
+        "--include-protein-sequences",
+        action="store_true",
+        help=(
+            "Publish a complete-proteome Parquet sidecar inside the immutable resource "
+            "for exact and regex protein motif searches."
+        ),
+    )
     parser.add_argument("--require-exact-tax-id", action="append", default=[])
     parser.add_argument("--include-clade-tax-id", action="append", default=[])
     parser.add_argument("--only-in-clade-tax-id", action="append", default=[])
@@ -287,6 +315,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 focus_proteins_path=focus_path,
                 focus_group_type="HOG",
                 focus_hierarchy_node="N0",
+                expression_manifest_path=args.expression_manifest,
+                expression_aliases_path=args.expression_aliases,
+                expression_minimum_value=args.expression_minimum_value,
+                expression_broad_fraction=args.expression_broad_fraction,
+                expression_threads=args.expression_threads,
+                expression_memory_mb=args.expression_memory_mb,
+                include_protein_sequences=args.include_protein_sequences,
             )
             _LOGGER.info(
                 "Completed E3 precursor run %s with status %s",
@@ -330,6 +365,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 benchmark_bootstrap_resamples=(
                     args.benchmark_bootstrap_resamples
                 ),
+                expression_manifest_path=args.expression_manifest,
+                expression_aliases_path=args.expression_aliases,
+                expression_minimum_value=args.expression_minimum_value,
+                expression_broad_fraction=args.expression_broad_fraction,
+                expression_threads=args.expression_threads,
+                expression_memory_mb=args.expression_memory_mb,
+                include_protein_sequences=args.include_protein_sequences,
             )
             _LOGGER.info(
                 "Completed dispersion benchmark run %s with status %s",
@@ -358,6 +400,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             force=args.force,
             keep_failed_work=args.keep_failed_work,
             verbose=args.verbose,
+            expression_manifest_path=args.expression_manifest,
+            expression_aliases_path=args.expression_aliases,
+            expression_minimum_value=args.expression_minimum_value,
+            expression_broad_fraction=args.expression_broad_fraction,
+            expression_threads=args.expression_threads,
+            expression_memory_mb=args.expression_memory_mb,
+            include_protein_sequences=args.include_protein_sequences,
         )
         _LOGGER.info("Completed run %s with status %s", manifest["run_id"], manifest["status"])
         return 0
@@ -382,9 +431,18 @@ def _validate_inspect_arguments(
         parser.error("--results-dir is required for --action inspect.")
     if any(
         value is not None
-        for value in (args.output_dir, args.run_id, args.resource_dir, args.report_output)
+        for value in (
+            args.output_dir,
+            args.run_id,
+            args.resource_dir,
+            args.report_output,
+            args.expression_manifest,
+            args.expression_aliases,
+        )
     ):
         parser.error("Run and report output arguments are not valid for --action inspect.")
+    if args.include_protein_sequences:
+        parser.error("--include-protein-sequences is not valid for --action inspect.")
 
 
 def _validate_run_arguments(*, parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
@@ -419,6 +477,8 @@ def _validate_run_arguments(*, parser: argparse.ArgumentParser, args: argparse.N
         parser.error(
             "--benchmark-proteins requires --action dispersion-benchmark."
         )
+    if args.expression_aliases is not None and args.expression_manifest is None:
+        parser.error("--expression-aliases requires --expression-manifest.")
 
 
 def _validate_e3_precursor_arguments(
@@ -475,6 +535,8 @@ def _validate_e3_precursor_arguments(
         parser.error(
             "--benchmark-proteins requires --action dispersion-benchmark."
         )
+    if args.expression_aliases is not None and args.expression_manifest is None:
+        parser.error("--expression-aliases requires --expression-manifest.")
 
 
 def _validate_dispersion_benchmark_arguments(
@@ -532,6 +594,8 @@ def _validate_dispersion_benchmark_arguments(
         parser.error(
             "--benchmark-bootstrap-resamples must be between 100 and 100,000."
         )
+    if args.expression_aliases is not None and args.expression_manifest is None:
+        parser.error("--expression-aliases requires --expression-manifest.")
 
 
 def _validate_report_arguments(
@@ -556,9 +620,18 @@ def _validate_report_arguments(
         parser.error(f"{' and '.join(missing)} required for --action report.")
     if any(
         value is not None
-        for value in (args.results_dir, args.inspection_output, args.output_dir, args.run_id)
+        for value in (
+            args.results_dir,
+            args.inspection_output,
+            args.output_dir,
+            args.run_id,
+            args.expression_manifest,
+            args.expression_aliases,
+        )
     ):
         parser.error("Inspection and run arguments are not valid for --action report.")
+    if args.include_protein_sequences:
+        parser.error("--include-protein-sequences is not valid for --action report.")
     resource = args.resource_dir.expanduser().resolve()
     report_paths = [args.report_output]
     if args.log_output is not None:
@@ -607,8 +680,12 @@ def _validate_coverage_arguments(
             args.inspection_output,
             args.report_output,
             args.log_output,
+            args.expression_manifest,
+            args.expression_aliases,
         )
     ):
         parser.error(
             "Inspection, raw-run and report-only paths are not valid for coverage-tree."
         )
+    if args.include_protein_sequences:
+        parser.error("--include-protein-sequences is not valid for coverage-tree.")

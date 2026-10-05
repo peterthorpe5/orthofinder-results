@@ -1,18 +1,30 @@
-"""Streamlit page for conserved C-terminal protein motifs across HOGs."""
+"""Streamlit page for taxonomic protein-sequence motif conservation."""
 
 from __future__ import annotations
 
+import math
+from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 import plotly.graph_objects as go
 import streamlit as st
+from plotly.subplots import make_subplots
 
 from orthofinder_results.errors import InputValidationError
 
 from .documentation_page import render_page_guidance
 from .exports import render_plotly_figure, render_table_downloads
+from .expression import (
+    CONTEXT_COLUMNS,
+    expression_available,
+    expression_dimensions,
+    expression_group_species,
+    expression_group_summaries,
+    expression_heatmap_cells,
+    expression_member_evidence,
+)
 from .models import ResourceIdentity
 from .taxonomy import (
     TaxonomyAuthority,
@@ -22,33 +34,58 @@ from .taxonomy import (
 from .terminal_motif import (
     DEFAULT_MOTIF,
     DEFAULT_THRESHOLD,
+    EXACT_C_TERMINAL,
+    REGEX_ANYWHERE,
+    REGEX_C_TERMINAL,
+    SequenceSearch,
     motif_group_members,
     motif_group_summary,
+    motif_hierarchy_nodes,
     motif_species,
-    validate_motif,
+    validate_sequence_search,
     validate_sequence_sidecar,
 )
 
 _SUMMARY_HELP = {
-    "HOG": "Root or selected hierarchy-level HOG identifier.",
-    "Proteins with sequences": "Distinct sequence-bearing proteins used as the denominator.",
-    "Species represented": "Species contributing at least one sequence-bearing protein.",
-    "Matching proteins": "Proteins ending with the exact selected motif.",
-    "Matching fraction": "Matching proteins divided by all sequence-bearing proteins in the HOG.",
-    "Matching species": "Species with at least one protein ending with the motif.",
-    "Matching species list": "Exact OrthoFinder labels for matching species.",
-    "Focal lineage represented": "Reviewed descendant species present in this HOG.",
-    "Focal lineage matching": "Reviewed descendant species with at least one motif match.",
-    "Focal lineage coverage": "Matching descendants divided by represented descendants.",
+    "Group": "Exact HOG or original OrthoFinder orthogroup identifier.",
+    "Members": "All distinct proteins assigned to the group.",
+    "Sequences assessed": "Members with a reconciled non-empty protein sequence.",
+    "Sequence coverage": "Sequences assessed divided by all group members.",
+    "Analysis proteins": "Assessed proteins in the selected primary species set.",
+    "Matching analysis proteins": "Primary-set proteins matching the search.",
+    "Analysis protein match": "Matching divided by assessed primary-set proteins.",
+    "Analysis species assessed": "Primary species represented by an assessed sequence.",
+    "Analysis species matching": "Primary species with at least one matching protein.",
+    "Analysis species match": "Matching divided by assessed primary species.",
+    "All matching species": "All sampled species with at least one matching protein.",
+}
+_SPECIES_HELP = {
+    "OrthoFinder species": "Exact species label in the completed OrthoFinder run.",
+    "Accepted species": "Reviewed scientific name from the taxonomy authority.",
+    "NCBI taxon ID": "Reviewed NCBI Taxonomy identifier.",
+    "Analysis role": "Primary denominator, required comparison, excluded or other sampled.",
+    "Published proteins": "All group members for this species.",
+    "Assessed": "Members with a reconciled sequence.",
+    "Matching": "Assessed proteins matching the active search.",
+    "Unavailable": "Members without an assessable sequence.",
+    "Match fraction": "Matching divided by assessed proteins for this species.",
+    "Species result": "Human-readable evidence state; unavailable is not measured zero.",
 }
 _MEMBER_HELP = {
-    "Species": "Exact species label from the OrthoFinder run.",
+    "Accepted species": "Reviewed species name when available.",
+    "OrthoFinder species": "Exact label used by the source OrthoFinder run.",
+    "NCBI taxon ID": "Reviewed NCBI Taxonomy identifier.",
+    "Analysis role": "How this species participates in the current comparison.",
     "Protein ID": "Original member identifier mapped by SequenceIDs.txt.",
     "Internal ID": "OrthoFinder internal sequence identifier.",
+    "Source FASTA": "Original proteome FASTA recorded by OrthoFinder.",
+    "Protein description": "Description retained from the original FASTA header when available.",
+    "Raw FASTA header": "Complete source header retained for identifier and provenance audit.",
+    "Sequence available": "Whether a non-empty reconciled sequence was assessable.",
     "Sequence length": "Protein length after removal of a terminal FASTA stop marker.",
-    "Observed terminus": "Last residues, using the same length as the selected motif.",
-    "Matches motif": "True only when the complete exact C-terminal motif matches.",
-    "Sequence": "Complete protein sequence used for the call.",
+    "Matches search": "Whether this protein matches the active exact or regex search.",
+    "Matched sequence": "First matching sequence fragment, or the exact suffix.",
+    "Sequence": "Complete protein sequence; hidden in the on-screen table by default.",
 }
 
 
@@ -58,254 +95,962 @@ def render_terminal_motif_page(
     sidecar_path_text: str,
     taxonomy_path_text: str = "",
 ) -> None:
-    """Render flexible terminal-motif conservation discovery and exports."""
+    """Render flexible exact and regex sequence-conservation discovery."""
 
-    st.header("C-terminal motif conservation")
+    st.header("Protein motif conservation")
     render_page_guidance(key="terminal_motif")
     st.write(
-        "Find HOGs in which an exact protein C-terminal motif is conserved across "
-        "proteins and species. The grant-facing default is terminal asparagine (N), "
-        "but any canonical amino-acid suffix up to 100 residues can be tested."
+        "Find OrthoFinder groups whose proteins share an exact C-terminal motif or, "
+        "when explicitly enabled, a regular-expression pattern. Qualification is "
+        "calculated over a transparent primary species set; other lineages remain "
+        "available as independent comparison evidence."
     )
     if not sidecar_path_text.strip():
-        st.warning(
-            "No HOG motif analysis has run in this view. The open DuckDB contains HOG "
-            "memberships, but not the complete amino-acid sequences needed to inspect "
-            "their terminal residues."
-        )
-        st.subheader("One-time setup")
-        st.write(
-            "Build the sequence sidecar from the same OrthoFinder Results_* directory, "
-            "copy it beside the completed resource if necessary, and restart the viewer "
-            "with `--terminal-motif-parquet`. This does not rerun OrthoFinder or alter "
-            "the completed resource. HOG and taxonomic controls appear after it loads."
-        )
-        st.code(
-            "orthofinder-terminal-motif-build \\\n"
-            "  --orthofinder-results-dir /path/to/Results_Feb26 \\\n"
-            "  --output-parquet /path/to/terminal_motif_sequences.parquet",
-            language="bash",
-        )
+        _render_setup_state()
         return
     try:
         sidecar = validate_sequence_sidecar(path=Path(sidecar_path_text))
         species = motif_species(sidecar_path=sidecar)
+        authority = _load_taxonomy(
+            species=species,
+            taxonomy_path_text=taxonomy_path_text,
+        )
     except InputValidationError as error:
         st.error(str(error))
         return
 
-    authority = _load_taxonomy(species=species, taxonomy_path_text=taxonomy_path_text)
-
-    controls = st.columns((1.0, 1.4, 1.0, 1.2))
-    motif_text = controls[0].text_input(
-        "Exact C-terminal motif", value=DEFAULT_MOTIF, help="Canonical one-letter codes only."
-    )
-    threshold_percent = controls[1].slider(
-        "Minimum matching proteins",
-        min_value=0,
-        max_value=100,
-        value=int(DEFAULT_THRESHOLD * 100),
-        step=1,
-        help="Percentage of sequence-bearing proteins in a HOG ending with the exact motif.",
-    )
-    minimum_species = controls[2].number_input(
-        "Minimum species",
-        min_value=1,
-        max_value=max(1, len(species)),
-        value=min(3, max(1, len(species))),
-        step=1,
-    )
-    maximum_rows = controls[3].number_input(
-        "Maximum HOGs", min_value=10, max_value=20_000, value=2_000, step=10
-    )
-    required_species = st.multiselect(
-        "Species that must have at least one matching protein",
-        options=species,
-        help=(
-            "Use this to require Arabidopsis, human or other focal species. Leaving it "
-            "empty does not privilege any species."
-        ),
-    )
-    hierarchy_node = st.text_input(
-        "HOG hierarchy node",
-        value="N0",
-        help="N0 is the root HOG level in the current analysis; exact labels are retained.",
-    )
-    focal_taxon_id: int | None = None
-    required_taxon_ids: tuple[int, ...] = ()
-    excluded_taxon_ids: tuple[int, ...] = ()
-    lineage_threshold = 0.0
-    if authority is None:
-        st.warning(
-            "No reviewed taxonomy authority exactly matches these sequence labels. "
-            "Exact-species filtering remains available, but lineage filtering is "
-            "disabled. Supply a reviewed taxonomy TSV under Advanced settings."
-        )
-    else:
-        st.subheader("Taxonomic conservation filters")
-        options = authority.taxon_options()
-        option_by_label = {option.display_label(): option for option in options}
-        labels = tuple(option_by_label)
-        taxonomy_controls = st.columns((1.5, 1.0))
-        focal_label = taxonomy_controls[0].selectbox(
-            "Focal lineage",
-            options=("All reviewed sampled species", *labels),
-            help=(
-                "Restrict conservation calculations to reviewed sampled descendants "
-                "of this taxon, for example flowering plants, eudicots or humans."
-            ),
-        )
-        lineage_threshold = (
-            taxonomy_controls[1].slider(
-                "Minimum matching descendants",
-                min_value=0,
-                max_value=100,
-                value=80,
-                step=1,
-                help=(
-                    "Percentage of represented descendant species that must contain at "
-                    "least one protein ending with the motif."
-                ),
-            )
-            / 100.0
-        )
-        if focal_label != "All reviewed sampled species":
-            focal_taxon_id = option_by_label[focal_label].taxon_id
-        required_labels = st.multiselect(
-            "Lineages that must contain a matching descendant",
-            options=labels,
-            help=(
-                "Optional cross-clade requirement. For example, require both a plant "
-                "lineage and Homo to contain at least one matching protein."
-            ),
-        )
-        excluded_labels = st.multiselect(
-            "Lineages that must not contain a matching descendant",
-            options=labels,
-            help="Optional negative control; leave empty for the usual discovery analysis.",
-        )
-        required_taxon_ids = tuple(option_by_label[label].taxon_id for label in required_labels)
-        excluded_taxon_ids = tuple(option_by_label[label].taxon_id for label in excluded_labels)
     try:
-        motif = validate_motif(motif=motif_text)
+        search = _render_search_controls()
+        group_type, hierarchy_node = _render_group_controls(resource=resource)
+        filters = _render_conservation_controls(species_count=len(species))
+        taxonomy = _render_taxonomy_controls(
+            species=species,
+            authority=authority,
+        )
         query_rows = motif_group_summary(
             resource=resource,
             sidecar_path=sidecar,
-            motif=motif,
-            threshold=float(threshold_percent) / 100.0,
-            minimum_species=int(minimum_species),
-            required_species=required_species,
+            motif=search.expression,
+            search_mode=search.mode,
+            threshold=filters["threshold"],
+            minimum_species=filters["minimum_species"],
+            minimum_proteins=filters["minimum_proteins"],
+            analysis_species=taxonomy["analysis_species"],
+            required_species=taxonomy["required_species"],
+            group_type=group_type,
             hierarchy_node=hierarchy_node,
-            maximum_rows=20_000 if authority is not None else int(maximum_rows),
+            maximum_rows=20_000 if authority is not None else filters["maximum_rows"],
         )
         rows = _apply_taxonomy_filters(
             rows=query_rows,
             authority=authority,
-            focal_taxon_id=focal_taxon_id,
-            minimum_lineage_fraction=lineage_threshold,
-            required_taxon_ids=required_taxon_ids,
-            excluded_taxon_ids=excluded_taxon_ids,
-        )[: int(maximum_rows)]
+            minimum_lineage_fraction=filters["lineage_threshold"],
+            required_taxon_ids=taxonomy["required_taxon_ids"],
+            excluded_taxon_ids=taxonomy["excluded_taxon_ids"],
+        )[: filters["maximum_rows"]]
     except InputValidationError as error:
         st.error(str(error))
         return
+
     st.caption(
-        f"{len(rows):,} HOGs pass the current filters. Denominators include only proteins "
-        "with successfully reconciled sequences."
+        f"{len(rows):,} groups pass the current filters. Matching fractions use only "
+        "successfully reconciled sequences; sequence coverage is reported separately."
     )
     if not rows:
-        st.warning("No HOG passes the current motif, conservation and species filters.")
+        st.warning("No group passes the current sequence, conservation and taxonomy filters.")
         return
-    display_rows = tuple(_display_summary(row=row) for row in rows)
+    _render_metrics(
+        rows=rows,
+        search=search,
+        threshold=filters["threshold"],
+        species_count=len(taxonomy["analysis_species"]),
+    )
+    roles = _species_roles(
+        species=species,
+        analysis_species=taxonomy["analysis_species"],
+        authority=authority,
+        required_taxon_ids=taxonomy["required_taxon_ids"],
+        excluded_taxon_ids=taxonomy["excluded_taxon_ids"],
+    )
+    views = ["Candidate groups", "Taxonomic matrix", "Inspect one group"]
+    if expression_available(resource=resource):
+        views.append("RNA-seq expression")
+    selected_view = st.radio(
+        "Result view",
+        options=views,
+        horizontal=True,
+        label_visibility="collapsed",
+        key="terminal_motif_result_view",
+    )
+    if selected_view == "Candidate groups":
+        _render_candidate_overview(
+            rows=rows,
+            search=search,
+            threshold=filters["threshold"],
+            group_type=group_type,
+        )
+    elif selected_view == "Taxonomic matrix":
+        _render_taxonomic_matrix(
+            rows=rows,
+            species=taxonomy["analysis_species"],
+            search=search,
+        )
+    elif selected_view == "Inspect one group":
+        _render_selected_group(
+            rows=rows,
+            resource=resource,
+            sidecar=sidecar,
+            search=search,
+            group_type=group_type,
+            hierarchy_node=hierarchy_node,
+            authority=authority,
+            roles=roles,
+        )
+    else:
+        _render_expression_evidence(
+            rows=rows,
+            resource=resource,
+            group_type=group_type,
+            hierarchy_node=hierarchy_node,
+        )
+
+
+def _render_setup_state() -> None:
+    """Explain the one-time sequence-authority setup."""
+
+    st.warning(
+        "No group motif analysis has run in this view. The open DuckDB contains group "
+        "memberships, but not the complete amino-acid sequences needed for motif search."
+    )
+    st.subheader("One-time setup")
+    st.write(
+        "Build the sequence sidecar from the same OrthoFinder Results_* directory and "
+        "restart the viewer with `--terminal-motif-parquet`. This does not rerun "
+        "OrthoFinder. Exact, regex and taxonomic controls appear only after it loads."
+    )
+    st.code(
+        "orthofinder-terminal-motif-build \\\n"
+        "  --orthofinder-results-dir /path/to/Results_Feb26 \\\n"
+        "  --output-parquet /path/to/orthofinder_sequences.parquet",
+        language="bash",
+    )
+
+
+def _render_search_controls() -> SequenceSearch:
+    """Render exact-versus-regex controls and return a validated search."""
+
+    st.subheader("Sequence search")
+    use_regex = st.toggle(
+        "Enable regular-expression search",
+        value=False,
+        help=(
+            "Off by default. Exact C-terminal matching is used unless you explicitly "
+            "enable regex mode."
+        ),
+    )
+    if not use_regex:
+        expression = st.text_input(
+            "Exact C-terminal sequence",
+            value=DEFAULT_MOTIF,
+            help="Canonical one-letter amino-acid codes; no regex interpretation.",
+        )
+        return validate_sequence_search(expression=expression, mode=EXACT_C_TERMINAL)
+    mode_label = st.radio(
+        "Regular-expression location",
+        ("Anywhere in the protein", "C-terminus only"),
+        horizontal=True,
+        help=(
+            "Anywhere finds the first occurrence at any position. C-terminus only "
+            "anchors the expression automatically; a trailing $ is optional."
+        ),
+    )
+    expression = st.text_input(
+        "Protein regular expression",
+        value="",
+        placeholder="Example: N[^P][ST]",
+        help=(
+            "Applied to upper-case amino-acid sequences with DuckDB's RE2 engine. "
+            "Regular expressions are never enabled implicitly."
+        ),
+    )
+    mode = REGEX_ANYWHERE if mode_label == "Anywhere in the protein" else REGEX_C_TERMINAL
+    return validate_sequence_search(expression=expression, mode=mode)
+
+
+def _render_group_controls(*, resource: ResourceIdentity) -> tuple[str, str]:
+    """Render OrthoFinder grouping authority controls."""
+
+    st.subheader("Orthology grouping")
+    label = st.radio(
+        "Grouping authority",
+        ("Hierarchical orthogroups (HOGs)", "Original OrthoFinder orthogroups"),
+        horizontal=True,
+    )
+    if label == "Original OrthoFinder orthogroups":
+        return "LEGACY_ORTHOGROUP", ""
+    nodes = motif_hierarchy_nodes(resource=resource)
+    default_index = nodes.index("N0") if "N0" in nodes else 0
+    hierarchy_node = st.selectbox(
+        "HOG hierarchy node",
+        options=nodes,
+        index=default_index,
+        help="N0 is the root HOG authority in this study; other available levels remain explicit.",
+    )
+    return "HOG", hierarchy_node
+
+
+def _render_conservation_controls(*, species_count: int) -> dict[str, Any]:
+    """Render bounded conservation and result-size controls."""
+
+    controls = st.columns((1.4, 1.0, 1.0, 1.0))
+    threshold = controls[0].slider(
+        "Minimum matching analysis proteins",
+        min_value=0,
+        max_value=100,
+        value=int(DEFAULT_THRESHOLD * 100),
+        step=1,
+    ) / 100.0
+    minimum_proteins = int(
+        controls[1].number_input(
+            "Minimum analysis proteins", min_value=1, max_value=1_000_000, value=2, step=1
+        )
+    )
+    minimum_species = int(
+        controls[2].number_input(
+            "Minimum analysis species",
+            min_value=1,
+            max_value=max(1, species_count),
+            value=min(2, max(1, species_count)),
+            step=1,
+        )
+    )
+    maximum_rows = int(
+        controls[3].number_input(
+            "Maximum groups", min_value=10, max_value=20_000, value=2_000, step=10
+        )
+    )
+    lineage_threshold = st.slider(
+        "Minimum analysis species containing a match",
+        min_value=0,
+        max_value=100,
+        value=80,
+        step=1,
+        help=(
+            "Percentage of assessed primary species with at least one matching protein. "
+            "This is separate from the protein-level threshold."
+        ),
+    ) / 100.0
+    return {
+        "threshold": threshold,
+        "minimum_proteins": minimum_proteins,
+        "minimum_species": minimum_species,
+        "maximum_rows": maximum_rows,
+        "lineage_threshold": lineage_threshold,
+    }
+
+
+def _render_taxonomy_controls(
+    *, species: tuple[str, ...], authority: TaxonomyAuthority | None
+) -> dict[str, Any]:
+    """Render primary and comparison taxonomic controls."""
+
+    st.subheader("Taxonomic conservation filters")
+    required_species = tuple(
+        st.multiselect(
+            "Exact species that must contain a matching protein",
+            options=species,
+            help="Optional exact-label requirement, independent of broader lineage filters.",
+        )
+    )
+    if authority is None:
+        st.warning(
+            "No reviewed taxonomy authority exactly matches these sequence labels. "
+            "Lineage controls are disabled; exact species controls remain available."
+        )
+        selected = tuple(
+            st.multiselect(
+                "Primary species included in conservation calculations",
+                options=species,
+                default=species,
+            )
+        )
+        return {
+            "analysis_species": selected,
+            "required_species": required_species,
+            "required_taxon_ids": (),
+            "excluded_taxon_ids": (),
+        }
+    options = authority.taxon_options()
+    option_by_label = {option.display_label(): option for option in options}
+    labels = tuple(option_by_label)
+    focal_label = st.selectbox(
+        "Primary lineage used for conservation calculations",
+        options=("All reviewed sampled species", *labels),
+        help=(
+            "Only assessed descendants of this lineage enter the primary protein and "
+            "species denominators. Other taxa remain comparison evidence."
+        ),
+    )
+    if focal_label == "All reviewed sampled species":
+        analysis_species = authority.reviewed_species
+    else:
+        analysis_species = authority.target_species(
+            taxon_id=option_by_label[focal_label].taxon_id
+        )
+    with st.expander("Optional exact primary-species subset"):
+        restrict_species = st.toggle("Restrict the primary lineage to selected species")
+        if restrict_species:
+            analysis_species = tuple(
+                st.multiselect(
+                    "Primary species",
+                    options=analysis_species,
+                    default=analysis_species,
+                )
+            )
+    required_labels = st.multiselect(
+        "Comparison lineages that must contain a matching descendant",
+        options=labels,
+        help="For example, require evidence in both a plant lineage and Homo.",
+    )
+    excluded_labels = st.multiselect(
+        "Lineages that must not contain a matching descendant",
+        options=labels,
+        help="Optional negative-comparison filter; leave empty for discovery.",
+    )
+    return {
+        "analysis_species": tuple(analysis_species),
+        "required_species": required_species,
+        "required_taxon_ids": tuple(
+            option_by_label[label].taxon_id for label in required_labels
+        ),
+        "excluded_taxon_ids": tuple(
+            option_by_label[label].taxon_id for label in excluded_labels
+        ),
+    }
+
+
+def _render_metrics(
+    *,
+    rows: Sequence[Mapping[str, Any]],
+    search: SequenceSearch,
+    threshold: float,
+    species_count: int,
+) -> None:
+    """Render compact result metrics."""
+
     metrics = st.columns(4)
-    metrics[0].metric("Passing HOGs", f"{len(rows):,}")
-    metrics[1].metric("Motif", motif)
-    metrics[2].metric("Threshold", f"{threshold_percent}%")
-    metrics[3].metric("Sequence species", f"{len(species):,}")
+    metrics[0].metric("Qualifying groups", f"{len(rows):,}")
+    metrics[1].metric("Active search", search.expression)
+    metrics[2].metric("Protein threshold", f"{threshold:.0%}")
+    metrics[3].metric("Primary species", f"{species_count:,}")
+
+
+def _render_candidate_overview(
+    *,
+    rows: Sequence[Mapping[str, Any]],
+    search: SequenceSearch,
+    threshold: float,
+    group_type: str,
+) -> None:
+    """Render the candidate landscape and complete group table."""
 
     st.subheader("Conservation landscape")
     with st.expander("What this graph shows and how to interpret it"):
         st.write(
-            "Each point is one HOG. The horizontal axis is the fraction of its "
-            "sequence-bearing proteins ending with the exact motif; the vertical axis "
-            "is the number of species with at least one match. Larger points contain "
-            "more proteins. Strong pilot candidates lie towards the upper right, but "
-            "large paralogue expansions and uneven species sampling must be checked in "
-            "the protein table. This is not evidence of Cereblon binding or degradation."
+            "Each point is one group. The horizontal axis is the matching fraction among "
+            "assessed proteins in the primary species set. The vertical axis is the number "
+            "of primary species with a match. Point size reflects assessed proteins and "
+            "colour shows sequence coverage. Strong candidates lie towards the upper right "
+            "with high coverage. This is sequence evidence, not evidence of binding or degradation."
         )
-    figure = _motif_figure(rows=rows, motif=motif, threshold=threshold_percent / 100.0)
+    figure = _motif_figure(rows=rows, search=search, threshold=threshold)
+    stem = _search_stem(search=search)
     render_plotly_figure(
         figure=figure,
-        file_stem=f"terminal_motif_{motif}_conservation",
+        file_stem=f"{stem}_conservation_landscape",
         key="terminal_motif_conservation_figure",
         pdf_width=1600,
         pdf_height=1000,
     )
+    display_rows = tuple(_display_summary(row=row) for row in rows)
     st.dataframe(display_rows, width="stretch", hide_index=True)
     render_table_downloads(
         records=display_rows,
-        file_stem=f"terminal_motif_{motif}_hog_summary",
+        file_stem=f"{stem}_{group_type.lower()}_summary",
         key="terminal_motif_summary_tsv",
         column_definitions=_SUMMARY_HELP,
-        workbook_title=f"C-terminal motif {motif} HOG summary",
+        workbook_title=f"Protein search {search.expression} group summary",
     )
 
-    st.subheader("Inspect one HOG")
+
+def _render_taxonomic_matrix(
+    *,
+    rows: Sequence[Mapping[str, Any]],
+    species: Sequence[str],
+    search: SequenceSearch,
+) -> None:
+    """Render a bounded group-by-species evidence-state heatmap."""
+
+    st.subheader("Group-by-species conservation matrix")
+    maximum_groups = st.slider(
+        "Groups shown in matrix", min_value=5, max_value=100, value=40, step=5
+    )
+    with st.expander("What this heatmap shows and how to interpret it"):
+        st.write(
+            "Rows are the highest-ranked passing groups and columns are primary species. "
+            "Gold means at least one matching protein; blue means an assessed sequence but "
+            "no match; grey means the species is represented but unassessed; white means it "
+            "is not represented in that group. Look for broad gold blocks rather than a "
+            "signal driven by one expanded species."
+        )
+    figure = _taxonomic_heatmap(
+        rows=rows[:maximum_groups],
+        species=species,
+        search=search,
+    )
+    render_plotly_figure(
+        figure=figure,
+        file_stem=f"{_search_stem(search=search)}_taxonomic_matrix",
+        key="terminal_motif_taxonomic_matrix",
+        pdf_width=1900,
+        pdf_height=max(900, 28 * min(maximum_groups, len(rows))),
+    )
+
+
+def _render_selected_group(
+    *,
+    rows: Sequence[Mapping[str, Any]],
+    resource: ResourceIdentity,
+    sidecar: Path,
+    search: SequenceSearch,
+    group_type: str,
+    hierarchy_node: str,
+    authority: TaxonomyAuthority | None,
+    roles: Mapping[str, str],
+) -> None:
+    """Render species and protein evidence for one selected group."""
+
+    st.subheader("Inspect one group")
     selected = st.selectbox(
-        "HOG", options=[str(row["group_id"]) for row in rows], key="terminal_motif_hog"
+        "Group",
+        options=[str(row["group_id"]) for row in rows],
+        key="terminal_motif_group",
     )
     members = motif_group_members(
         resource=resource,
         sidecar_path=sidecar,
-        motif=motif,
+        motif=search.expression,
+        search_mode=search.mode,
         group_id=selected,
+        group_type=group_type,
         hierarchy_node=hierarchy_node,
     )
-    member_rows = tuple(_display_member(row=row) for row in members)
-    if authority is not None:
-        st.subheader("Taxonomic distribution of the selected HOG")
-        taxon_rows = _species_distribution(rows=members, authority=authority)
-        st.dataframe(taxon_rows, width="stretch", hide_index=True)
-        render_table_downloads(
-            records=taxon_rows,
-            file_stem=f"{selected}_{motif}_taxonomic_distribution",
-            key="terminal_motif_taxonomy_tsv",
-            column_definitions={},
-            workbook_title=f"{selected} taxonomic motif distribution",
-        )
-    st.subheader("Protein-level calls")
-    st.dataframe(member_rows, width="stretch", hide_index=True)
+    species_rows = _species_distribution(
+        rows=members,
+        authority=authority,
+        roles=roles,
+    )
+    st.markdown("#### Species evidence")
+    species_figure = _species_evidence_figure(rows=species_rows, group_id=selected)
+    render_plotly_figure(
+        figure=species_figure,
+        file_stem=f"{selected}_{_search_stem(search=search)}_species_evidence",
+        key="terminal_motif_species_evidence_figure",
+        pdf_width=1800,
+        pdf_height=1000,
+    )
+    st.dataframe(species_rows, width="stretch", hide_index=True)
     render_table_downloads(
-        records=member_rows,
-        file_stem=f"{selected}_{motif}_terminal_calls",
+        records=species_rows,
+        file_stem=f"{selected}_{_search_stem(search=search)}_species_evidence",
+        key="terminal_motif_taxonomy_tsv",
+        column_definitions=_SPECIES_HELP,
+        workbook_title=f"{selected} species motif evidence",
+    )
+    st.markdown("#### Protein-level calls")
+    filtered_members, show_sequences = _filter_member_rows(rows=members, roles=roles)
+    member_rows = tuple(
+        _display_member(
+            row=row,
+            authority=authority,
+            roles=roles,
+            show_sequence=show_sequences,
+        )
+        for row in filtered_members
+    )
+    st.dataframe(member_rows, width="stretch", hide_index=True)
+    export_rows = tuple(
+        _display_member(
+            row=row,
+            authority=authority,
+            roles=roles,
+            show_sequence=True,
+        )
+        for row in filtered_members
+    )
+    render_table_downloads(
+        records=export_rows,
+        file_stem=f"{selected}_{_search_stem(search=search)}_protein_calls",
         key="terminal_motif_member_tsv",
         column_definitions=_MEMBER_HELP,
-        workbook_title=f"{selected} C-terminal motif calls",
+        workbook_title=f"{selected} protein motif calls",
     )
     st.download_button(
-        "Download selected HOG as FASTA",
-        data=_members_to_fasta(rows=members),
-        file_name=f"{selected}_{motif}_terminal_candidates.fasta",
+        "Download filtered protein sequences as FASTA",
+        data=_members_to_fasta(rows=filtered_members),
+        file_name=f"{selected}_{_search_stem(search=search)}_proteins.fasta",
         mime="text/x-fasta",
         key="terminal_motif_fasta",
     )
+    if expression_available(resource=resource):
+        st.markdown("#### RNA-seq mapping and expression status")
+        with st.expander("How to interpret the RNA-seq evidence states"):
+            st.write(
+                "Mappings are exact and species scoped. MAPPED_UNIQUE means one Atlas "
+                "gene matched at the best identifier tier. AMBIGUOUS and NOT_MAPPED are "
+                "unavailable evidence, not negative expression. NO_EXPRESSION_RECORDS "
+                "means a gene mapped but no compatible Atlas context was published. TPM "
+                "and FPKM are never combined within an experiment."
+            )
+        expression_rows = expression_member_evidence(
+            resource=resource,
+            group_type=group_type,
+            hierarchy_node=hierarchy_node,
+            group_id=selected,
+        )
+        st.dataframe(expression_rows, width="stretch", hide_index=True)
+        render_table_downloads(
+            records=expression_rows,
+            file_stem=f"{selected}_rna_seq_member_evidence",
+            key="terminal_motif_expression_members",
+            workbook_title=f"{selected} RNA-seq member evidence",
+        )
 
 
-def _display_summary(*, row: Mapping[str, Any]) -> dict[str, Any]:
-    """Return one readable HOG summary row."""
+def _render_expression_evidence(
+    *,
+    rows: Sequence[Mapping[str, Any]],
+    resource: ResourceIdentity,
+    group_type: str,
+    hierarchy_node: str,
+) -> None:
+    """Render lazy, unit-safe heatmap and cross-species UpSet evidence."""
 
-    return {
-        "HOG": row["group_id"],
-        "Proteins with sequences": row["sequence_count"],
-        "Species represented": row["species_count"],
-        "Matching proteins": row["matching_sequence_count"],
-        "Matching fraction": row["matching_fraction"],
-        "Matching species": row["matching_species_count"],
-        "Matching species list": row["matching_species"] or "",
-        "Focal lineage represented": row.get("focal_represented_species", ""),
-        "Focal lineage matching": row.get("focal_matching_species", ""),
-        "Focal lineage coverage": row.get("focal_matching_fraction", ""),
+    st.subheader("RNA-seq expression evidence")
+    with st.expander("What these analyses show and their limitations"):
+        st.write(
+            "This section asks whether proteins in the motif-qualified groups have "
+            "species-scoped Expression Atlas evidence, and in which tissues or contexts. "
+            "It does not test whether the motif causes expression or whether Cereblon "
+            "regulates transcript abundance. Protein accumulation is post-transcriptional, "
+            "so RNA-seq is supporting biological context rather than a substitute for "
+            "protein-level validation. Missing, ambiguous and unmapped evidence stays blank."
+        )
+    dimensions = expression_dimensions(resource=resource)
+    units = dimensions["units"]
+    if not units:
+        st.info("The resource contains the expression schema but no mapped context rows.")
+        return
+    available_groups = [str(row["group_id"]) for row in rows]
+    default_groups = available_groups[: min(12, len(available_groups))]
+    selected_groups = tuple(
+        st.multiselect(
+            "Groups compared (maximum 25)",
+            options=available_groups,
+            default=default_groups,
+            help="The heatmap is deliberately bounded so labels and PDF exports remain readable.",
+        )
+    )
+    if not selected_groups:
+        st.info("Select at least one group to display RNA-seq evidence.")
+        return
+    if len(selected_groups) > 25:
+        st.error("Select no more than 25 groups for the expression heatmap.")
+        return
+    controls = st.columns((1.2, 1.0, 1.4, 0.8))
+    context_label = controls[0].selectbox(
+        "Heatmap context",
+        options=tuple(CONTEXT_COLUMNS),
+        index=1 if "Organism part / tissue" in CONTEXT_COLUMNS else 0,
+    )
+    default_unit = units.index("TPM") if "TPM" in units else 0
+    unit = controls[1].selectbox("Expression unit", options=units, index=default_unit)
+    selected_species = tuple(
+        controls[2].multiselect(
+            "Expression species",
+            options=dimensions["species"],
+            default=dimensions["species"],
+            help="An empty selection means all expression-bearing species.",
+        )
+    )
+    log_transform = controls[3].toggle("log2(1 + value)", value=True)
+    summaries = expression_group_summaries(
+        resource=resource,
+        group_type=group_type,
+        hierarchy_node=hierarchy_node,
+        group_ids=selected_groups,
+    )
+    _render_expression_metrics(rows=summaries)
+    heatmap_cells = expression_heatmap_cells(
+        resource=resource,
+        group_type=group_type,
+        hierarchy_node=hierarchy_node,
+        group_ids=selected_groups,
+        context_column=CONTEXT_COLUMNS[context_label],
+        expression_unit=unit,
+        species=selected_species,
+    )
+    st.markdown("#### Cross-species expression heatmap")
+    if not heatmap_cells:
+        st.info("No mapped expression contexts match the current unit and species selection.")
+    else:
+        heatmap = _expression_heatmap_figure(
+            cells=heatmap_cells,
+            selected_groups=selected_groups,
+            log_transform=log_transform,
+        )
+        render_plotly_figure(
+            figure=heatmap,
+            file_stem="motif_group_rna_seq_expression_heatmap",
+            key="terminal_motif_expression_heatmap",
+            pdf_width=2100,
+            pdf_height=max(1000, 52 * len(selected_groups)),
+        )
+        st.dataframe(heatmap_cells, width="stretch", hide_index=True)
+        render_table_downloads(
+            records=heatmap_cells,
+            file_stem="motif_group_rna_seq_expression_heatmap_cells",
+            key="terminal_motif_expression_heatmap_cells",
+            workbook_title="Motif-group RNA-seq heatmap cells",
+        )
+
+    st.markdown("#### Cross-species expression-evidence intersections")
+    species_rows = expression_group_species(
+        resource=resource,
+        group_type=group_type,
+        hierarchy_node=hierarchy_node,
+        group_ids=selected_groups,
+    )
+    ranked_species = _rank_expression_species(rows=species_rows)
+    upset_species = tuple(
+        st.multiselect(
+            "Species included in UpSet intersections (maximum 8)",
+            options=ranked_species,
+            default=ranked_species[: min(6, len(ranked_species))],
+            help=(
+                "A group belongs to a species set when at least one member has one or more "
+                "compatible expression contexts."
+            ),
+        )
+    )
+    if len(upset_species) > 8:
+        st.error("Select no more than eight species for a readable UpSet plot.")
+    elif upset_species:
+        intersections = _expression_intersections(
+            rows=species_rows,
+            group_ids=selected_groups,
+            species=upset_species,
+        )
+        upset = _expression_upset_figure(
+            intersections=intersections,
+            species=upset_species,
+        )
+        render_plotly_figure(
+            figure=upset,
+            file_stem="motif_group_rna_seq_species_upset",
+            key="terminal_motif_expression_upset",
+            pdf_width=1900,
+            pdf_height=1200,
+        )
+        st.dataframe(intersections, width="stretch", hide_index=True)
+        render_table_downloads(
+            records=intersections,
+            file_stem="motif_group_rna_seq_species_intersections",
+            key="terminal_motif_expression_intersections",
+            workbook_title="RNA-seq species evidence intersections",
+        )
+    st.markdown("#### Group and species evidence tables")
+    st.dataframe(summaries, width="stretch", hide_index=True)
+    render_table_downloads(
+        records=summaries,
+        file_stem="motif_group_rna_seq_summary",
+        key="terminal_motif_expression_group_summary",
+        workbook_title="Motif-group RNA-seq summary",
+    )
+    st.dataframe(species_rows, width="stretch", hide_index=True)
+    render_table_downloads(
+        records=species_rows,
+        file_stem="motif_group_rna_seq_species_summary",
+        key="terminal_motif_expression_species_summary",
+        workbook_title="Motif-group RNA-seq species summary",
+    )
+
+
+def _render_expression_metrics(*, rows: Sequence[Mapping[str, Any]]) -> None:
+    """Render expression mapping and observation totals for selected groups."""
+
+    group_count = len(rows)
+    member_count = sum(int(row["member_count"]) for row in rows)
+    mapped = sum(int(row["unique_mapped_member_count"]) for row in rows)
+    observed = sum(int(row["expression_observed_member_count"]) for row in rows)
+    metrics = st.columns(4)
+    metrics[0].metric("Groups", f"{group_count:,}")
+    metrics[1].metric("Group members", f"{member_count:,}")
+    metrics[2].metric(
+        "Uniquely mapped",
+        f"{mapped:,}",
+        help="Exact best-tier, species-scoped mappings to one Atlas gene.",
+    )
+    metrics[3].metric(
+        "With expression contexts",
+        f"{observed:,}",
+        help="Mapped proteins with at least one compatible Atlas context row.",
+    )
+
+
+def _expression_heatmap_figure(
+    *,
+    cells: Sequence[Mapping[str, Any]],
+    selected_groups: Sequence[str],
+    log_transform: bool,
+) -> go.Figure:
+    """Build a group-by-species/context expression heatmap with blank missing cells."""
+
+    contexts = tuple(
+        dict.fromkeys(
+            f"{row['species_label']} — {row['context_label']}" for row in cells
+        )
+    )
+    lookup = {
+        (str(row["group_id"]), f"{row['species_label']} — {row['context_label']}"): row
+        for row in cells
     }
+    values = []
+    custom = []
+    for group_id in selected_groups:
+        value_row = []
+        custom_row = []
+        for context in contexts:
+            row = lookup.get((group_id, context))
+            if row is None:
+                value_row.append(None)
+                custom_row.append([None, 0, 0, None])
+                continue
+            raw = float(row["median_expression"])
+            value_row.append(math.log2(1.0 + max(0.0, raw)) if log_transform else raw)
+            custom_row.append(
+                [
+                    raw,
+                    int(row["mapped_member_count"]),
+                    int(row["experiment_count"]),
+                    float(row["positive_context_fraction"]),
+                ]
+            )
+        values.append(value_row)
+        custom.append(custom_row)
+    unit = str(cells[0]["expression_unit"])
+    colour_title = f"log2(1 + {unit})" if log_transform else unit
+    figure = go.Figure(
+        go.Heatmap(
+            z=values,
+            x=contexts,
+            y=list(selected_groups),
+            customdata=custom,
+            colorscale=((0.0, "#ffffff"), (0.50, "#fcae91"), (1.0, "#cb181d")),
+            colorbar={"title": colour_title},
+            hoverongaps=False,
+            hovertemplate=(
+                "Group=%{y}<br>Species / context=%{x}<br>"
+                f"Median {unit}=%{{customdata[0]:.4g}}<br>"
+                "Mapped proteins=%{customdata[1]}<br>Experiments=%{customdata[2]}<br>"
+                "Positive-context fraction=%{customdata[3]:.1%}<extra></extra>"
+            ),
+        )
+    )
+    figure.update_layout(
+        title="Median RNA-seq expression by OrthoFinder group and biological context",
+        xaxis_title="Species and biological context",
+        yaxis_title="OrthoFinder group",
+        yaxis={"autorange": "reversed"},
+        xaxis={"tickangle": -45},
+        template="plotly_white",
+        height=max(700, 40 * len(selected_groups)),
+    )
+    return figure
+
+
+def _rank_expression_species(*, rows: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
+    """Rank species by the number of selected groups with observed expression."""
+
+    counts: dict[str, int] = defaultdict(int)
+    for row in rows:
+        if int(row["expression_observed_member_count"]) > 0:
+            counts[str(row["species_label"])] += 1
+    return tuple(sorted(counts, key=lambda value: (-counts[value], value)))
+
+
+def _expression_intersections(
+    *,
+    rows: Sequence[Mapping[str, Any]],
+    group_ids: Sequence[str],
+    species: Sequence[str],
+) -> tuple[dict[str, Any], ...]:
+    """Return exact UpSet combinations of species with observed RNA-seq evidence."""
+
+    observed = {
+        (str(row["group_id"]), str(row["species_label"]))
+        for row in rows
+        if int(row["expression_observed_member_count"]) > 0
+    }
+    groups_by_combination: dict[tuple[str, ...], list[str]] = defaultdict(list)
+    for group_id in group_ids:
+        combination = tuple(label for label in species if (group_id, label) in observed)
+        groups_by_combination[combination].append(group_id)
+    ordered = sorted(
+        groups_by_combination.items(),
+        key=lambda item: (-len(item[1]), -len(item[0]), item[0]),
+    )
+    return tuple(
+        {
+            "Intersection": index,
+            "Species with expression evidence": "; ".join(combination) or "None selected",
+            "Species count": len(combination),
+            "Group count": len(groups),
+            "Groups": "; ".join(sorted(groups)),
+        }
+        for index, (combination, groups) in enumerate(ordered, start=1)
+    )
+
+
+def _expression_upset_figure(
+    *, intersections: Sequence[Mapping[str, Any]], species: Sequence[str]
+) -> go.Figure:
+    """Build an UpSet-style bar-and-membership-matrix figure."""
+
+    x_values = [int(row["Intersection"]) for row in intersections]
+    figure = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        row_heights=(0.46, 0.54),
+        vertical_spacing=0.04,
+    )
+    figure.add_bar(
+        x=x_values,
+        y=[int(row["Group count"]) for row in intersections],
+        marker_color="#147d78",
+        hovertemplate="Intersection %{x}<br>Groups=%{y}<extra></extra>",
+        showlegend=False,
+        row=1,
+        col=1,
+    )
+    selected_by_x = {
+        int(row["Intersection"]): set(
+            str(row["Species with expression evidence"]).split("; ")
+        )
+        for row in intersections
+    }
+    for x_value in x_values:
+        selected = selected_by_x[x_value]
+        active_indices = [index for index, label in enumerate(species) if label in selected]
+        if len(active_indices) > 1:
+            figure.add_trace(
+                go.Scatter(
+                    x=[x_value, x_value],
+                    y=[min(active_indices), max(active_indices)],
+                    mode="lines",
+                    line={"color": "#374151", "width": 2},
+                    hoverinfo="skip",
+                    showlegend=False,
+                ),
+                row=2,
+                col=1,
+            )
+        figure.add_trace(
+            go.Scatter(
+                x=[x_value] * len(species),
+                y=list(range(len(species))),
+                mode="markers",
+                marker={
+                    "size": 11,
+                    "color": [
+                        "#147d78" if label in selected else "#d1d5db" for label in species
+                    ],
+                },
+                customdata=[[label, label in selected] for label in species],
+                hovertemplate=(
+                    "Intersection=%{x}<br>Species=%{customdata[0]}<br>"
+                    "Expression evidence=%{customdata[1]}<extra></extra>"
+                ),
+                showlegend=False,
+            ),
+            row=2,
+            col=1,
+        )
+    figure.update_yaxes(title_text="Groups", row=1, col=1)
+    figure.update_yaxes(
+        tickmode="array",
+        tickvals=list(range(len(species))),
+        ticktext=[label.replace("_", " ") for label in species],
+        autorange="reversed",
+        title_text="Species",
+        row=2,
+        col=1,
+    )
+    figure.update_xaxes(title_text="Exact expression-evidence intersection", row=2, col=1)
+    figure.update_layout(
+        title="UpSet intersections of observed RNA-seq evidence across species",
+        template="plotly_white",
+        height=max(720, 55 * len(species) + 420),
+        bargap=0.25,
+    )
+    return figure
+
+
+def _filter_member_rows(
+    *, rows: Sequence[Mapping[str, Any]], roles: Mapping[str, str]
+) -> tuple[tuple[Mapping[str, Any], ...], bool]:
+    """Render member filters and return the selected rows."""
+
+    controls = st.columns((1.0, 1.2, 1.4))
+    state = controls[0].selectbox(
+        "Match state",
+        ("All proteins", "Matching", "Not matching", "Sequence unavailable"),
+    )
+    role_options = tuple(sorted(set(roles.values())))
+    selected_roles = tuple(
+        controls[1].multiselect("Analysis role", options=role_options, default=role_options)
+    )
+    species_options = tuple(sorted({str(row["species_label"]) for row in rows}))
+    selected_species = tuple(
+        controls[2].multiselect("Species", options=species_options, default=species_options)
+    )
+    identifier_text = st.text_input(
+        "Protein identifier contains",
+        value="",
+        help="Literal case-insensitive filter over the original protein identifier.",
+    ).strip().casefold()
+    show_sequences = st.toggle("Show complete sequences in the on-screen table", value=False)
+    filtered = []
+    for row in rows:
+        available = bool(row["sequence_available"])
+        matched = bool(row["motif_match"])
+        species = str(row["species_label"])
+        if state == "Matching" and not matched:
+            continue
+        if state == "Not matching" and (matched or not available):
+            continue
+        if state == "Sequence unavailable" and available:
+            continue
+        if roles.get(species, "UNRESOLVED") not in selected_roles:
+            continue
+        if species not in selected_species:
+            continue
+        if identifier_text and identifier_text not in str(row["member_id"]).casefold():
+            continue
+        filtered.append(row)
+    st.caption(f"{len(filtered):,} of {len(rows):,} protein rows shown.")
+    return tuple(filtered), show_sequences
 
 
 def _load_taxonomy(
@@ -318,124 +1063,237 @@ def _load_taxonomy(
     return read_matching_bundled_taxonomy(expected_species=species)
 
 
-def _species_set(value: Any) -> set[str]:
-    """Parse a semicolon-delimited species aggregation."""
-
-    return {item for item in str(value or "").split("; ") if item}
-
-
 def _apply_taxonomy_filters(
     *,
     rows: Sequence[Mapping[str, Any]],
     authority: TaxonomyAuthority | None,
-    focal_taxon_id: int | None,
     minimum_lineage_fraction: float,
     required_taxon_ids: Sequence[int],
     excluded_taxon_ids: Sequence[int],
 ) -> tuple[dict[str, Any], ...]:
-    """Annotate and filter HOG summaries with reviewed descendant sets."""
+    """Annotate and filter summaries using assessed primary species."""
 
-    if authority is None:
-        return tuple(dict(row) for row in rows)
-    focal = set(
-        authority.reviewed_species
-        if focal_taxon_id is None
-        else authority.target_species(taxon_id=focal_taxon_id)
+    required = (
+        [set(authority.target_species(taxon_id=value)) for value in required_taxon_ids]
+        if authority is not None
+        else []
     )
-    required = [set(authority.target_species(taxon_id=value)) for value in required_taxon_ids]
-    excluded = [set(authority.target_species(taxon_id=value)) for value in excluded_taxon_ids]
+    excluded = (
+        [set(authority.target_species(taxon_id=value)) for value in excluded_taxon_ids]
+        if authority is not None
+        else []
+    )
     result: list[dict[str, Any]] = []
     for source in rows:
-        represented = _species_set(source.get("represented_species"))
-        matching = _species_set(source.get("matching_species"))
-        focal_represented = represented & focal
-        focal_matching = matching & focal
-        fraction = len(focal_matching) / len(focal_represented) if focal_represented else 0.0
-        if not focal_represented or fraction < minimum_lineage_fraction:
+        assessed = _species_set(source.get("analysis_assessed_species"))
+        analysis_matching = _species_set(source.get("analysis_matching_species"))
+        all_matching = _species_set(source.get("matching_species"))
+        fraction = len(analysis_matching) / len(assessed) if assessed else 0.0
+        if not assessed or fraction < minimum_lineage_fraction:
             continue
-        if any(not matching.intersection(target) for target in required):
+        if any(not all_matching.intersection(target) for target in required):
             continue
-        if any(matching.intersection(target) for target in excluded):
+        if any(all_matching.intersection(target) for target in excluded):
             continue
         row = dict(source)
-        row["focal_represented_species"] = len(focal_represented)
-        row["focal_matching_species"] = len(focal_matching)
-        row["focal_matching_fraction"] = fraction
+        row["analysis_species_match_fraction"] = fraction
         result.append(row)
     return tuple(result)
 
 
-def _species_distribution(
-    *, rows: Sequence[Mapping[str, Any]], authority: TaxonomyAuthority
-) -> tuple[dict[str, Any], ...]:
-    """Summarise motif calls by reviewed species for one HOG."""
+def _species_roles(
+    *,
+    species: Sequence[str],
+    analysis_species: Sequence[str],
+    authority: TaxonomyAuthority | None,
+    required_taxon_ids: Sequence[int],
+    excluded_taxon_ids: Sequence[int],
+) -> dict[str, str]:
+    """Assign mutually exclusive roles for result display."""
 
-    records = {row.workflow_species_label: row for row in authority.reviewed_records}
+    primary = set(analysis_species)
+    required = set()
+    excluded = set()
+    if authority is not None:
+        for taxon_id in required_taxon_ids:
+            required.update(authority.target_species(taxon_id=taxon_id))
+        for taxon_id in excluded_taxon_ids:
+            excluded.update(authority.target_species(taxon_id=taxon_id))
+    roles = {}
+    for label in species:
+        if label in primary:
+            role = "PRIMARY_ANALYSIS"
+        elif label in required:
+            role = "REQUIRED_COMPARISON"
+        elif label in excluded:
+            role = "EXCLUDED_COMPARISON"
+        else:
+            role = "OTHER_SAMPLED"
+        roles[label] = role
+    return roles
+
+
+def _species_distribution(
+    *,
+    rows: Sequence[Mapping[str, Any]],
+    authority: TaxonomyAuthority | None,
+    roles: Mapping[str, str],
+) -> tuple[dict[str, Any], ...]:
+    """Summarise motif calls and missingness by species for one group."""
+
+    records = (
+        {row.workflow_species_label: row for row in authority.reviewed_records}
+        if authority is not None
+        else {}
+    )
     grouped: dict[str, list[Mapping[str, Any]]] = {}
     for row in rows:
         grouped.setdefault(str(row["species_label"]), []).append(row)
     output = []
     for species, members in sorted(grouped.items()):
         record = records.get(species)
+        assessed = sum(bool(row["sequence_available"]) for row in members)
         matches = sum(bool(row["motif_match"]) for row in members)
+        unavailable = len(members) - assessed
+        if assessed == 0:
+            result = "Sequence unavailable"
+        elif matches == 0:
+            result = "Assessed; no match"
+        elif matches == assessed:
+            result = "All assessed proteins match"
+        else:
+            result = "Some assessed proteins match"
         output.append(
             {
                 "OrthoFinder species": species,
                 "Accepted species": record.accepted_species_name if record else "Unresolved",
                 "NCBI taxon ID": record.ncbi_taxon_id if record else "",
-                "Proteins": len(members),
-                "Matching proteins": matches,
-                "Species has motif": matches > 0,
+                "Analysis role": roles.get(species, "UNRESOLVED"),
+                "Published proteins": len(members),
+                "Assessed": assessed,
+                "Matching": matches,
+                "Unavailable": unavailable,
+                "Match fraction": matches / assessed if assessed else None,
+                "Species result": result,
             }
         )
     return tuple(output)
 
 
-def _display_member(*, row: Mapping[str, Any]) -> dict[str, Any]:
-    """Return one readable protein-level motif call."""
+def _display_summary(*, row: Mapping[str, Any]) -> dict[str, Any]:
+    """Return one readable group summary row."""
 
     return {
-        "Species": row["species_label"],
-        "Protein ID": row["member_id"],
-        "Internal ID": row["internal_id"],
-        "Sequence length": row["sequence_length"],
-        "Observed terminus": row["observed_terminus"],
-        "Matches motif": row["motif_match"],
-        "Sequence": row["sequence"],
+        "Group": row["group_id"],
+        "Members": row["total_member_count"],
+        "Sequences assessed": row["sequence_count"],
+        "Sequence coverage": row["sequence_coverage"],
+        "Analysis proteins": row["analysis_sequence_count"],
+        "Matching analysis proteins": row["analysis_matching_sequence_count"],
+        "Analysis protein match": row["analysis_matching_fraction"],
+        "Analysis species assessed": row["analysis_assessed_species_count"],
+        "Analysis species matching": row["analysis_matching_species_count"],
+        "Analysis species match": row["analysis_species_match_fraction"],
+        "All matching species": row["matching_species"] or "",
     }
 
 
-def _motif_figure(*, rows: Sequence[Mapping[str, Any]], motif: str, threshold: float) -> go.Figure:
-    """Build the interactive protein-fraction versus species-breadth plot."""
+def _display_member(
+    *,
+    row: Mapping[str, Any],
+    authority: TaxonomyAuthority | None,
+    roles: Mapping[str, str],
+    show_sequence: bool,
+) -> dict[str, Any]:
+    """Return one readable protein-level sequence call."""
+
+    species = str(row["species_label"])
+    records = (
+        {item.workflow_species_label: item for item in authority.reviewed_records}
+        if authority is not None
+        else {}
+    )
+    record = records.get(species)
+    result = {
+        "Accepted species": record.accepted_species_name if record else "Unresolved",
+        "OrthoFinder species": species,
+        "NCBI taxon ID": record.ncbi_taxon_id if record else "",
+        "Analysis role": roles.get(species, "UNRESOLVED"),
+        "Protein ID": row["member_id"],
+        "Internal ID": row["internal_id"] or "",
+        "Source FASTA": row.get("source_fasta") or "",
+        "Protein description": _protein_description(
+            raw_header=str(row.get("raw_header") or ""),
+            member_id=str(row["member_id"]),
+        ),
+        "Raw FASTA header": row.get("raw_header") or "",
+        "Sequence available": row["sequence_available"],
+        "Sequence length": row["sequence_length"] or "",
+        "Matches search": row["motif_match"],
+        "Matched sequence": row["matched_sequence"] or "",
+    }
+    if show_sequence:
+        result["Sequence"] = row["sequence"] or ""
+    return result
+
+
+def _protein_description(*, raw_header: str, member_id: str) -> str:
+    """Return the source description after the first FASTA identifier token."""
+
+    text = raw_header.strip()
+    if not text:
+        return ""
+    first, separator, description = text.partition(" ")
+    if separator and first in {member_id, member_id.split(maxsplit=1)[0]}:
+        return description.strip()
+    return description.strip() if separator else ""
+
+
+def _motif_figure(
+    *, rows: Sequence[Mapping[str, Any]], search: SequenceSearch, threshold: float
+) -> go.Figure:
+    """Build the protein-fraction versus species-breadth landscape."""
 
     figure = go.Figure(
         go.Scatter(
-            x=[float(row["matching_fraction"]) for row in rows],
-            y=[int(row["matching_species_count"]) for row in rows],
+            x=[float(row["analysis_matching_fraction"]) for row in rows],
+            y=[int(row["analysis_matching_species_count"]) for row in rows],
             mode="markers",
             customdata=[
-                [row["group_id"], row["sequence_count"], row["species_count"]] for row in rows
+                [
+                    row["group_id"],
+                    row["analysis_sequence_count"],
+                    row["analysis_assessed_species_count"],
+                    row["sequence_coverage"],
+                ]
+                for row in rows
             ],
             marker={
-                "size": [max(7, min(30, 5 + int(row["sequence_count"]) ** 0.5)) for row in rows],
-                "color": [int(row["matching_species_count"]) for row in rows],
-                "colorscale": "Viridis",
+                "size": [
+                    max(7, min(30, 5 + int(row["analysis_sequence_count"]) ** 0.5))
+                    for row in rows
+                ],
+                "color": [float(row["sequence_coverage"]) for row in rows],
+                "colorscale": "Tealgrn",
+                "cmin": 0,
+                "cmax": 1,
                 "showscale": True,
-                "colorbar": {"title": "Matching species"},
-                "opacity": 0.75,
+                "colorbar": {"title": "Sequence coverage", "tickformat": ".0%"},
+                "opacity": 0.78,
             },
             hovertemplate=(
-                "HOG=%{customdata[0]}<br>Matching fraction=%{x:.1%}<br>"
-                "Matching species=%{y}<br>Sequences=%{customdata[1]}<br>"
-                "Represented species=%{customdata[2]}<extra></extra>"
+                "Group=%{customdata[0]}<br>Analysis protein match=%{x:.1%}<br>"
+                "Matching analysis species=%{y}<br>Analysis sequences=%{customdata[1]}<br>"
+                "Assessed analysis species=%{customdata[2]}<br>"
+                "Overall sequence coverage=%{customdata[3]:.1%}<extra></extra>"
             ),
         )
     )
     figure.add_vline(x=threshold, line_dash="dash", line_color="#d95f02")
     figure.update_layout(
-        title=f"HOG conservation of exact C-terminal motif {motif}",
-        xaxis_title="Fraction of sequence-bearing proteins matching motif",
-        yaxis_title="Species with at least one matching protein",
+        title=f"Group conservation of {search.display_label}",
+        xaxis_title="Fraction of assessed primary proteins matching",
+        yaxis_title="Primary species with at least one matching protein",
         xaxis={"tickformat": ".0%", "range": [0, 1.01]},
         template="plotly_white",
         height=700,
@@ -443,15 +1301,133 @@ def _motif_figure(*, rows: Sequence[Mapping[str, Any]], motif: str, threshold: f
     return figure
 
 
+def _taxonomic_heatmap(
+    *,
+    rows: Sequence[Mapping[str, Any]],
+    species: Sequence[str],
+    search: SequenceSearch,
+) -> go.Figure:
+    """Build a group-by-species categorical evidence heatmap."""
+
+    selected_species = tuple(species)
+    matrix = []
+    hover = []
+    for row in rows:
+        represented = _species_set(row.get("represented_species"))
+        assessed = _species_set(row.get("assessed_species"))
+        matching = _species_set(row.get("matching_species"))
+        values = []
+        labels = []
+        for label in selected_species:
+            if label in matching:
+                values.append(3)
+                labels.append("Matching")
+            elif label in assessed:
+                values.append(2)
+                labels.append("Assessed; no match")
+            elif label in represented:
+                values.append(1)
+                labels.append("Sequence unavailable")
+            else:
+                values.append(0)
+                labels.append("Not represented")
+        matrix.append(values)
+        hover.append(labels)
+    figure = go.Figure(
+        go.Heatmap(
+            z=matrix,
+            x=selected_species,
+            y=[str(row["group_id"]) for row in rows],
+            customdata=hover,
+            zmin=0,
+            zmax=3,
+            colorscale=[
+                [0.00, "#ffffff"],
+                [0.24, "#ffffff"],
+                [0.25, "#b8b8b8"],
+                [0.49, "#b8b8b8"],
+                [0.50, "#2677a8"],
+                [0.74, "#2677a8"],
+                [0.75, "#f2b134"],
+                [1.00, "#f2b134"],
+            ],
+            colorbar={
+                "title": "Evidence",
+                "tickvals": [0, 1, 2, 3],
+                "ticktext": ["Absent", "Unavailable", "No match", "Match"],
+            },
+            hovertemplate=(
+                "Group=%{y}<br>Species=%{x}<br>Status=%{customdata}<extra></extra>"
+            ),
+        )
+    )
+    figure.update_layout(
+        title=f"Taxonomic distribution of {search.display_label}",
+        xaxis_title="Primary species",
+        yaxis_title="OrthoFinder group",
+        template="plotly_white",
+        height=max(650, 24 * len(rows)),
+        xaxis={"tickangle": -45},
+    )
+    return figure
+
+
+def _species_evidence_figure(
+    *, rows: Sequence[Mapping[str, Any]], group_id: str
+) -> go.Figure:
+    """Build a stacked assessed/matching/unavailable chart for one group."""
+
+    labels = [str(row["Accepted species"]) for row in rows]
+    matching = [int(row["Matching"]) for row in rows]
+    assessed_no_match = [int(row["Assessed"]) - int(row["Matching"]) for row in rows]
+    unavailable = [int(row["Unavailable"]) for row in rows]
+    figure = go.Figure()
+    figure.add_bar(name="Matching", x=labels, y=matching, marker_color="#d9a21b")
+    figure.add_bar(
+        name="Assessed; no match", x=labels, y=assessed_no_match, marker_color="#2677a8"
+    )
+    figure.add_bar(name="Unavailable", x=labels, y=unavailable, marker_color="#a8a8a8")
+    figure.update_layout(
+        title=f"Species-level protein evidence for {group_id}",
+        xaxis_title="Species",
+        yaxis_title="Proteins",
+        barmode="stack",
+        template="plotly_white",
+        height=650,
+        xaxis={"tickangle": -45},
+    )
+    return figure
+
+
+def _search_stem(*, search: SequenceSearch) -> str:
+    """Return a stable portable search label for filenames."""
+
+    mode = search.mode.lower()
+    expression = "".join(
+        character if character.isalnum() else "_"
+        for character in search.expression
+    )
+    return f"{mode}_{expression[:50].strip('_') or 'pattern'}"
+
+
+def _species_set(value: Any) -> set[str]:
+    """Parse a semicolon-delimited species aggregation."""
+
+    return {item for item in str(value or "").split("; ") if item}
+
+
 def _members_to_fasta(*, rows: Sequence[Mapping[str, Any]]) -> str:
-    """Serialise selected HOG members as wrapped FASTA."""
+    """Serialise selected group members with available sequences as wrapped FASTA."""
 
     chunks: list[str] = []
     for row in rows:
+        sequence = str(row.get("sequence") or "")
+        if not sequence:
+            continue
         header = (
-            f">{row['member_id']} species={row['species_label']} motif_match={row['motif_match']}"
+            f">{row['member_id']} species={row['species_label']} "
+            f"sequence_match={row['motif_match']}"
         )
-        sequence = str(row["sequence"])
         wrapped = (sequence[index : index + 80] for index in range(0, len(sequence), 80))
         chunks.extend((header, *wrapped))
-    return "\n".join(chunks) + "\n"
+    return "\n".join(chunks) + ("\n" if chunks else "")

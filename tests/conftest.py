@@ -475,6 +475,88 @@ def benchmark_application_resource(application_resource: Path) -> Path:
     return application_resource
 
 
+@pytest.fixture
+def expression_application_resource(application_resource: Path) -> Path:
+    """Add compact schema-5 RNA-seq evidence relations to the app fixture."""
+
+    database = application_resource / "duckdb/orthofinder_results.duckdb"
+    connection = duckdb.connect(str(database))
+    try:
+        connection.execute(
+            "CREATE TABLE expression_member_mapping AS SELECT * FROM (VALUES "
+            "('test_run','Species_A','alpha_1','MAPPED_UNIQUE',1,1,'GENEA','Gene A',"
+            "'alpha_1','one exact species-scoped gene'),"
+            "('test_run','Species_A','alpha_2','MAPPED_UNIQUE',1,1,'GENEB','Gene B',"
+            "'alpha_2','one exact species-scoped gene'),"
+            "('test_run','Species_B','beta_1','NOT_MAPPED',NULL,0,'','','',"
+            "'no exact species-scoped gene')) AS t(run_id,species_label,member_id,"
+            "mapping_status,mapping_tier,matched_gene_count,matched_gene_ids,"
+            "matched_gene_names,matched_aliases,reason)"
+        )
+        connection.execute(
+            "CREATE TABLE expression_member_summary AS SELECT * FROM (VALUES "
+            "('test_run','Species_A','alpha_1','MAPPED_UNIQUE','GENEA','Gene A',"
+            "1,'TPM',1,2,2,1.0,2.0,8.0,5.0,true,'EXPRESSION_OBSERVED'),"
+            "('test_run','Species_A','alpha_2','MAPPED_UNIQUE','GENEB','Gene B',"
+            "1,'TPM',1,2,1,0.5,0.0,1.0,0.5,true,'EXPRESSION_OBSERVED'),"
+            "('test_run','Species_B','beta_1','NOT_MAPPED','','',0,'',0,0,0,NULL,"
+            "NULL,NULL,NULL,false,'NOT_MAPPED')) AS t(run_id,species_label,member_id,"
+            "mapping_status,gene_id,gene_name,experiment_count,selected_expression_units,"
+            "expression_unit_count,context_count,positive_context_count,"
+            "positive_context_fraction,minimum_context_expression_value,"
+            "maximum_context_expression_value,median_context_expression_value,"
+            "broad_expression_supported,evidence_status)"
+        )
+        connection.execute(
+            "CREATE TABLE expression_context AS SELECT * FROM (VALUES "
+            "('test_run','Species_A','alpha_1','GENEA','Gene A','Expression Atlas',"
+            "'E-TEST-1','TPM','leaf','leaf','assay1',1,'leaf','adult','wild type','',"
+            "'none','control','leaf','MATCHED','value','single_value',8.0,NULL,NULL,NULL,"
+            "NULL,NULL,true,'expression.tsv','sha-expression','metadata.tsv','sha-metadata'),"
+            "('test_run','Species_A','alpha_1','GENEA','Gene A','Expression Atlas',"
+            "'E-TEST-1','TPM','root','root','assay2',1,'root','adult','wild type','',"
+            "'none','control','root','MATCHED','value','single_value',2.0,NULL,NULL,NULL,"
+            "NULL,NULL,true,'expression.tsv','sha-expression','metadata.tsv','sha-metadata'),"
+            "('test_run','Species_A','alpha_2','GENEB','Gene B','Expression Atlas',"
+            "'E-TEST-1','TPM','leaf','leaf','assay1',1,'leaf','adult','wild type','',"
+            "'none','control','leaf','MATCHED','value','single_value',1.0,NULL,NULL,NULL,"
+            "NULL,NULL,true,'expression.tsv','sha-expression','metadata.tsv','sha-metadata')) "
+            "AS t(run_id,species_label,member_id,gene_id,gene_name,source_database,"
+            "experiment_accession,expression_unit,sample_or_condition,atlas_group_label,"
+            "assay_ids,assay_count,organism_part,developmental_stage,genotype,cultivar,"
+            "treatment,condition,expression_context,metadata_status,"
+            "expression_value_statistic,expression_summary_type,expression_value,"
+            "expression_minimum,expression_lower_quartile,expression_median,"
+            "expression_upper_quartile,expression_maximum,expression_positive,"
+            "expression_source_file,expression_source_file_sha256,metadata_source_file,"
+            "metadata_source_file_sha256)"
+        )
+        connection.execute(
+            "CREATE TABLE expression_group_summary AS SELECT * FROM (VALUES "
+            "('test_run','HOG','N0','N0.HOG1',3,2,0,1,2,2,1,1,0.6667,0.6667,'TPM'),"
+            "('test_run','HOG','N0','N0.HOG3',3,0,0,3,0,0,0,0,0.0,0.0,'')) AS t("
+            "run_id,group_type,hierarchy_node,group_id,member_count,"
+            "unique_mapped_member_count,ambiguous_member_count,not_mapped_member_count,"
+            "expression_observed_member_count,broad_expression_member_count,"
+            "mapped_species_count,expression_observed_species_count,mapping_fraction,"
+            "expression_observed_fraction,selected_expression_units)"
+        )
+        connection.execute(
+            "CREATE TABLE expression_import_audit AS SELECT 'test_run' run_id, "
+            "'fixture manifest' expression_manifest"
+        )
+        connection.execute("CREATE TABLE tree_payloads(dummy VARCHAR)")
+        connection.execute("UPDATE resource_metadata SET schema_version = 5")
+        connection.execute("CHECKPOINT")
+    finally:
+        connection.close()
+    manifest_path = application_resource / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["schema_version"] = 5
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return application_resource
+
+
 def _application_visual_payload() -> dict[str, object]:
     """Return one complete three-member report visual for application tests."""
 

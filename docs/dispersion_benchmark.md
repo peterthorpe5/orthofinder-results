@@ -92,32 +92,41 @@ With only three own controls, empirical individual p values are necessarily coar
 Use more controls when node-local time and space allow and individual-tail
 resolution is important.
 
-## Cluster execution
+## Cluster execution with motif sequences and RNA-seq evidence
 
-The wrapper requires seven positional arguments. A dash selects each packaged
-authority:
+The schema-5 wrapper requires eight positional arguments. Dashes select the packaged
+focus and benchmark authorities; the sixth argument is the corrected checksum-bound
+Expression Atlas manifest:
 
 ```bash
 PACKAGE_ROOT=/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/orthofinder-results
 CONDA_ENV=orthofinder_results
 RESULTS_DIR=/home/pthorpe001/data/2026_E3_protac/SSD_back_up_July_2026/Erin_Butterfield_data/Main_folder/OrthoFinder/Results_Feb26
-RUN_ID=results_feb26_dispersion_benchmark_v0_9_0
+EXPRESSION_ROOT=/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/analysis/expression_atlas_rebuild_v0_5_1_20260804
+EXPRESSION_MANIFEST=${EXPRESSION_ROOT}/manifests/e3_workflow_expression_resources.tsv
+RUN_ID=results_feb26_motif_expression_v0_11_0
 OUTPUT_ROOT=/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/orthofinder_results_resources
+LOG_DIR=${OUTPUT_ROOT}/slurm_logs/${RUN_ID}
+
+test -s "${EXPRESSION_MANIFEST}"
+mkdir -p "${LOG_DIR}"
+export ORTHOFINDER_EXPRESSION_MEMORY_MB=32768
 
 sbatch \
   --job-name=of_dispersion \
   --partition=barton \
-  --cpus-per-task=9 \
+  --cpus-per-task=13 \
   --mem=96G \
   --time=2-00:00:00 \
-  --output="${OUTPUT_ROOT}/slurm_logs/${RUN_ID}/orthofinder_results_%j.out" \
-  --error="${OUTPUT_ROOT}/slurm_logs/${RUN_ID}/orthofinder_results_%j.err" \
+  --output="${LOG_DIR}/orthofinder_results_%j.out" \
+  --error="${LOG_DIR}/orthofinder_results_%j.err" \
   "${PACKAGE_ROOT}/slurm/dispersion_benchmark.sbatch" \
   "${PACKAGE_ROOT}" \
   "${CONDA_ENV}" \
   "${RESULTS_DIR}" \
   - \
   - \
+  "${EXPRESSION_MANIFEST}" \
   "${RUN_ID}" \
   "${OUTPUT_ROOT}/${RUN_ID}" \
   --distance-max-members 250 \
@@ -125,11 +134,12 @@ sbatch \
   --benchmark-bootstrap-resamples 1000
 ```
 
-Create the persistent log directory before submission. The cluster scheduler must
-provide an absolute writable `TMPDIR`. The wrapper stages the completed OrthoFinder
-source and both authorities there. The pipeline uses node-local work space and
-publishes the formal result through its checksum-verified atomic publication layer.
-The wrapper refuses an existing formal output.
+The cluster scheduler must provide an absolute writable `TMPDIR`. The wrapper stages
+the completed OrthoFinder source, packaged biological authorities and expression
+manifest there. Manifest paths continue to identify checksum-bound Atlas Parquet
+partitions on GPFS; DuckDB uses bounded memory and spills to node-local work space.
+The pipeline embeds the complete protein sequence sidecar, publishes the formal result
+through its checksum-verified atomic publication layer and refuses an existing output.
 
 ## Machine-readable outputs
 
@@ -144,6 +154,11 @@ The wrapper refuses an existing formal output.
 | `benchmark_contrasts.tsv.gz` | planned profile contrast | Effect, confidence interval, p and FDR q |
 | `benchmark_individual_comparisons.tsv.gz` | target-background-metric | Leave-one-out empirical placement and FDR q |
 | `benchmark_cluster_classifications.tsv.gz` | target cluster | Empirical classification against own controls |
+| `expression_member_mapping.tsv.gz` | protein | Exact species-scoped RNA-seq mapping state |
+| `expression_member_summary.tsv.gz` | protein | Context coverage and broad-expression screen |
+| `expression_context.tsv.gz` | protein/context | TPM-preferred or FPKM-fallback evidence and metadata |
+| `expression_group_summary.tsv.gz` | group | Mapping and observed-expression coverage |
+| `evidence/protein_sequences.parquet` | protein | Embedded exact/regex motif-search authority |
 
 The same relations are typed in Parquet and DuckDB. Pairwise rows are retained for
 biological target clusters so the application can render their full distance and
@@ -152,8 +167,9 @@ which prevents the database from expanding merely to support calibration.
 
 ## Application interpretation and gene downloads
 
-Viewer version 0.9.1 opens an existing schema-4 benchmark resource directly; it
-does not require resource reconstruction. The calibrated-dispersion page is divided
+Viewer version 0.11.0 remains read-compatible with the existing schema-4 benchmark
+resource and opens the new schema-5 motif/expression resource. RNA-seq views require
+the schema-5 rebuild described above; the calibrated-dispersion page remains divided
 into three result-led tabs:
 
 - **Results at a glance** reports the broad preplanned comparisons in plain language,

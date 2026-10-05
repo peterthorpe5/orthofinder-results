@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+## 0.11.0 - 2026-10-05
+
+- Generalise the motif page from exact C-terminal searches to both HOG and original
+  orthogroup authorities, with exact suffix matching plus explicitly enabled regular
+  expressions either anywhere in the protein or anchored at the C-terminus.
+- Embed the complete reconciled protein-sequence Parquet in newly built resources so the
+  motif page opens without a separate local sidecar argument.
+- Add reviewed primary-lineage, required-lineage, excluded-lineage and exact-species
+  filtering while reporting assessed-sequence coverage separately from conservation.
+- Integrate the corrected checksum-bound Expression Atlas rebuild as generic schema-5
+  evidence: exact species-scoped aliases, unique/ambiguous/unmapped states, TPM-preferred
+  and FPKM-fallback unit selection, context metadata and group summaries.
+- Add a lazy RNA-seq result view with cross-species/context expression heatmaps and
+  species-intersection UpSet plots, plus exact member, cell, intersection and summary
+  downloads as TSV and formatted Excel and every figure as PDF.
+- Retain measured zero separately from missing, ambiguous, unmapped and absent evidence;
+  RNA-seq is described as transcript-context support rather than protein accumulation.
+- Add a distinct OrthoFinder Interrogation phylogenetic-network logo.
+- Improve interactive speed by loading only the selected motif result view, caching
+  immutable schema/selectors and deferring TSV, formatted-Excel and PDF generation until
+  the corresponding download is requested.
+- Extend the matched-dispersion Slurm workflow to manage the Expression Atlas manifest,
+  publish schema 5 with embedded protein sequences and refuse success when any required
+  expression or motif-evidence output is missing.
+
 ## 0.10.1 - 2026-10-03
 
 - Make the missing-sequence state explicit so it cannot be mistaken for an empty HOG

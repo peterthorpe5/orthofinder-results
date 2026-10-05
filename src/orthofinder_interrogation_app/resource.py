@@ -14,7 +14,7 @@ from orthofinder_results.errors import InputValidationError
 from .models import ResourceIdentity
 
 _LOGGER = logging.getLogger("orthofinder_interrogation_app.resource")
-SUPPORTED_SCHEMA_VERSIONS = frozenset({2, 3, 4})
+SUPPORTED_SCHEMA_VERSIONS = frozenset({2, 3, 4, 5})
 REQUIRED_RELATIONS = frozenset(
     {
         "distance_statistics",

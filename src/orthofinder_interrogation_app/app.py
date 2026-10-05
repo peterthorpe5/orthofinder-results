@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from importlib.resources import files
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -78,7 +79,7 @@ _PAGE_LABELS = {
     "All distance results": "All distance results",
     "Taxonomic search": "Taxonomic search",
     "Selection coverage tree": "Selection coverage tree",
-    "C-terminal motif conservation": "C-terminal motif conservation",
+    "C-terminal motif conservation": "Protein motif conservation",
     "Offline report": "Download report",
     "Methods": "Methods & provenance",
     "Glossary": "Glossary",
@@ -161,11 +162,19 @@ _DISTANCE_STATUS_LABELS = {
 def main() -> None:
     """Render the complete local read-only application."""
 
+    logo_path = Path(
+        str(
+            files("orthofinder_interrogation_app").joinpath(
+                "data", "orthofinder_interrogation_logo_v1.png"
+            )
+        )
+    )
     st.set_page_config(
         page_title="OrthoFinder Interrogation",
-        page_icon="🧬",
+        page_icon=str(logo_path),
         layout="wide",
     )
+    st.logo(str(logo_path), size="large")
     _inject_style()
     _configure_application_logging()
     st.title("OrthoFinder Interrogation")

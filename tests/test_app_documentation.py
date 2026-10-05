@@ -98,6 +98,9 @@ def test_glossary_is_unique_searchable_and_export_ready() -> None:
         "Benjamini–Hochberg FDR",
         "Matched residual",
         "Selection coverage tree",
+        "Expression Atlas",
+        "UpSet plot",
+        "TPM",
     ):
         assert required in terms
     pcoa = documentation_page.filter_glossary_entries(
@@ -128,7 +131,7 @@ def test_method_steps_are_ordered_complete_and_defensive() -> None:
     """The method table follows the full workflow and rejects ambiguous ordering."""
 
     records = documentation_page.method_records()
-    assert [record["Step"] for record in records] == list(range(1, 15))
+    assert [record["Step"] for record in records] == list(range(1, 16))
     assert records[0]["Stage"] == "Completed OrthoFinder analysis"
     assert records[-1]["Stage"] == "Immutable publication and read-only interrogation"
     assert all(record["Important qualification"] for record in records)
@@ -173,6 +176,7 @@ def test_resource_method_records_report_capabilities_without_mutation(
     assert indexed["Resource schema"] == "4"
     assert indexed["Portable tree payloads"] == "Available"
     assert indexed["Calibrated dispersion relations"] == "Available"
+    assert indexed["RNA-seq expression relations"] == "Unavailable"
     assert indexed["Application access"] == "Read-only"
 
 

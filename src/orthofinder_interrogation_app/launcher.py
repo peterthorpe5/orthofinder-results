@@ -155,11 +155,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             _LOGGER.error("Focus protein authority is not a file: %s", focus_path)
             return 2
         environment[FOCUS_ENVIRONMENT_VARIABLE] = str(focus_path)
-    if arguments.terminal_motif_parquet is not None:
+    motif_candidate = arguments.terminal_motif_parquet
+    if motif_candidate is None and resource.resource_path.is_dir():
+        bundled = resource.resource_path / "evidence" / "protein_sequences.parquet"
+        if bundled.is_file():
+            motif_candidate = bundled
+    if motif_candidate is not None:
         from .terminal_motif import validate_sequence_sidecar
 
         try:
-            motif_path = validate_sequence_sidecar(path=arguments.terminal_motif_parquet)
+            motif_path = validate_sequence_sidecar(path=motif_candidate)
         except OrthoFinderResultsError as error:
             _LOGGER.error("Terminal-motif sequence resource is invalid: %s", error)
             return 2

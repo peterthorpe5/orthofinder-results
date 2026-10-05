@@ -342,15 +342,17 @@ def render_table_downloads(
     with tsv_column:
         st.download_button(
             label=tsv_label,
-            data=records_to_tsv(records=records, fieldnames=headings),
+            data=partial(records_to_tsv, records=records, fieldnames=headings),
             file_name=f"{stem}.tsv",
             mime="text/tab-separated-values",
             key=key,
+            on_click="ignore",
         )
     with excel_column:
         st.download_button(
             label=excel_label,
-            data=records_to_excel_bytes(
+            data=partial(
+                records_to_excel_bytes,
                 records=records,
                 fieldnames=headings,
                 column_definitions=column_definitions,
@@ -359,6 +361,7 @@ def render_table_downloads(
             file_name=f"{stem}.xlsx",
             mime=EXCEL_MIME_TYPE,
             key=f"{key}_excel",
+            on_click="ignore",
         )
 
 
