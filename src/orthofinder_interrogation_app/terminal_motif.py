@@ -28,6 +28,7 @@ MAX_RESULT_ROWS = 20_000
 _CANONICAL_MOTIF = re.compile(r"^[ACDEFGHIKLMNPQRSTVWY]+$")
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
 REQUIRED_COLUMNS = frozenset({"internal_id", "species_label", "member_id", "sequence"})
+EMBEDDED_SEQUENCE_RELATION = "protein_sequences"
 
 
 @dataclass(frozen=True)
@@ -164,13 +165,38 @@ def _validate_sequence_sidecar_cached(
     return tuple(sorted(columns))
 
 
-def motif_species(*, sidecar_path: Path) -> tuple[str, ...]:
-    """Return exact species labels represented by the sequence sidecar."""
+def sequence_authority_available(
+    *, resource: ResourceIdentity, sidecar_path: Path | None = None
+) -> bool:
+    """Return whether embedded or explicitly supplied protein sequences are available."""
 
-    source = validate_sequence_sidecar(path=sidecar_path)
-    details = source.stat()
-    return _motif_species_cached(
-        source_text=str(source),
+    if sidecar_path is not None:
+        return sidecar_path.is_file() and sidecar_path.stat().st_size > 0
+    return EMBEDDED_SEQUENCE_RELATION in resource.relations
+
+
+def motif_species(
+    *,
+    sidecar_path: Path | None = None,
+    resource: ResourceIdentity | None = None,
+) -> tuple[str, ...]:
+    """Return exact species labels represented by the active sequence authority."""
+
+    if sidecar_path is not None:
+        source = validate_sequence_sidecar(path=sidecar_path)
+        details = source.stat()
+        return _motif_species_cached(
+            source_text=str(source),
+            size_bytes=details.st_size,
+            modified_ns=details.st_mtime_ns,
+        )
+    if resource is None or EMBEDDED_SEQUENCE_RELATION not in resource.relations:
+        raise InputValidationError(
+            "No embedded protein-sequence relation or external sequence sidecar is available."
+        )
+    details = resource.database_path.stat()
+    return _embedded_motif_species_cached(
+        database_path=str(resource.database_path),
         size_bytes=details.st_size,
         modified_ns=details.st_mtime_ns,
     )
@@ -189,6 +215,24 @@ def _motif_species_cached(
             "SELECT DISTINCT species_label FROM read_parquet(?) "
             "WHERE species_label <> '' ORDER BY species_label",
             [source_text],
+        ).fetchall()
+    finally:
+        connection.close()
+    return tuple(str(row[0]) for row in rows)
+
+
+@lru_cache(maxsize=8)
+def _embedded_motif_species_cached(
+    *, database_path: str, size_bytes: int, modified_ns: int
+) -> tuple[str, ...]:
+    """Return species from one unchanged embedded sequence relation."""
+
+    del size_bytes, modified_ns
+    connection = connect_read_only(database_path=Path(database_path))
+    try:
+        rows = connection.execute(
+            "SELECT DISTINCT species_label FROM protein_sequences "
+            "WHERE species_label <> '' ORDER BY species_label"
         ).fetchall()
     finally:
         connection.close()
@@ -232,7 +276,7 @@ def _motif_hierarchy_nodes_cached(
 def motif_group_summary(
     *,
     resource: ResourceIdentity,
-    sidecar_path: Path,
+    sidecar_path: Path | None = None,
     motif: str,
     threshold: float = DEFAULT_THRESHOLD,
     minimum_species: int = 2,
@@ -252,7 +296,10 @@ def motif_group_summary(
     """
 
     search = validate_sequence_search(expression=motif, mode=search_mode)
-    source = validate_sequence_sidecar(path=sidecar_path)
+    sequence_relation, sequence_parameters, _columns = _sequence_relation(
+        resource=resource,
+        sidecar_path=sidecar_path,
+    )
     _validate_summary_filters(
         threshold=threshold,
         minimum_species=minimum_species,
@@ -262,7 +309,7 @@ def motif_group_summary(
     )
     selected_species = _normalise_species(
         values=analysis_species,
-        fallback=motif_species(sidecar_path=source),
+        fallback=motif_species(resource=resource, sidecar_path=sidecar_path),
     )
     required = _normalise_species(values=required_species, fallback=(), allow_empty=True)
     table_name = _membership_table(group_type=group_type)
@@ -272,9 +319,9 @@ def motif_group_summary(
     parameters: list[Any] = [resource.run_id]
     if group_type == "HOG":
         parameters.append(hierarchy_node.strip())
+    parameters.extend(sequence_parameters)
     parameters.extend(
         [
-            str(source),
             search.query_expression,
             list(selected_species),
             minimum_species,
@@ -294,7 +341,7 @@ def motif_group_summary(
             "   upper(rtrim(s.sequence, '*')) AS clean_sequence,"
             "   s.sequence IS NOT NULL AND length(rtrim(s.sequence, '*')) > 0"
             "     AS sequence_available"
-            " FROM membership AS m LEFT JOIN read_parquet(?) AS s"
+            f" FROM membership AS m LEFT JOIN {sequence_relation} AS s"
             " ON s.species_label = m.species_label AND s.member_id = m.member_id"
             "), classified AS ("
             " SELECT *, CASE WHEN sequence_available THEN "
@@ -376,7 +423,7 @@ def motif_group_summary(
 def motif_group_members(
     *,
     resource: ResourceIdentity,
-    sidecar_path: Path,
+    sidecar_path: Path | None = None,
     motif: str,
     group_id: str,
     group_type: str = "HOG",
@@ -386,26 +433,21 @@ def motif_group_members(
     """Return sequence-level pattern calls for one selected group."""
 
     search = validate_sequence_search(expression=motif, mode=search_mode)
-    source = validate_sequence_sidecar(path=sidecar_path)
-    details = source.stat()
-    sidecar_columns = set(
-        _validate_sequence_sidecar_cached(
-            source_text=str(source),
-            size_bytes=details.st_size,
-            modified_ns=details.st_mtime_ns,
-        )
+    sequence_relation, sequence_parameters, sequence_columns = _sequence_relation(
+        resource=resource,
+        sidecar_path=sidecar_path,
     )
     raw_header_sql = (
-        "COALESCE(s.raw_header, '')" if "raw_header" in sidecar_columns else "''"
+        "COALESCE(s.raw_header, '')" if "raw_header" in sequence_columns else "''"
     )
     source_fasta_sql = (
-        "COALESCE(s.source_fasta, '')" if "source_fasta" in sidecar_columns else "''"
+        "COALESCE(s.source_fasta, '')" if "source_fasta" in sequence_columns else "''"
     )
     table_name = _membership_table(group_type=group_type)
     hierarchy_clause = " AND m.hierarchy_node = ?" if group_type == "HOG" else ""
     predicate_sql = _match_predicate_sql(search=search)
     match_text_sql = _matched_text_sql(search=search)
-    parameters: list[Any] = [str(source), resource.run_id]
+    parameters: list[Any] = [*sequence_parameters, resource.run_id]
     if group_type == "HOG":
         parameters.append(hierarchy_node.strip())
     parameters.extend([group_id, search.query_expression])
@@ -420,7 +462,7 @@ def motif_group_members(
             "   upper(rtrim(s.sequence, '*')) AS clean_sequence,"
             "   s.sequence IS NOT NULL AND length(rtrim(s.sequence, '*')) > 0"
             "     AS sequence_available"
-            f" FROM {table_name} AS m LEFT JOIN read_parquet(?) AS s"
+            f" FROM {table_name} AS m LEFT JOIN {sequence_relation} AS s"
             " ON s.species_label = m.species_label AND s.member_id = m.member_id"
             f" WHERE m.run_id = ?{hierarchy_clause} AND m.group_id = ?"
             ") SELECT species_label, member_id, internal_id, raw_header, source_fasta,"
@@ -439,6 +481,55 @@ def motif_group_members(
     finally:
         connection.close()
     return tuple(dict(zip(columns, row, strict=True)) for row in rows)
+
+
+def _sequence_relation(
+    *, resource: ResourceIdentity, sidecar_path: Path | None
+) -> tuple[str, list[Any], frozenset[str]]:
+    """Return a controlled embedded or external sequence relation for one query."""
+
+    if sidecar_path is not None:
+        source = validate_sequence_sidecar(path=sidecar_path)
+        details = source.stat()
+        columns = _validate_sequence_sidecar_cached(
+            source_text=str(source),
+            size_bytes=details.st_size,
+            modified_ns=details.st_mtime_ns,
+        )
+        return "read_parquet(?)", [str(source)], frozenset(columns)
+    if EMBEDDED_SEQUENCE_RELATION not in resource.relations:
+        raise InputValidationError(
+            "No embedded protein-sequence relation or external sequence sidecar is available."
+        )
+    details = resource.database_path.stat()
+    columns = _embedded_sequence_columns_cached(
+        database_path=str(resource.database_path),
+        size_bytes=details.st_size,
+        modified_ns=details.st_mtime_ns,
+    )
+    return '"protein_sequences"', [], frozenset(columns)
+
+
+@lru_cache(maxsize=8)
+def _embedded_sequence_columns_cached(
+    *, database_path: str, size_bytes: int, modified_ns: int
+) -> tuple[str, ...]:
+    """Validate columns in one unchanged embedded protein-sequence relation."""
+
+    del size_bytes, modified_ns
+    connection = connect_read_only(database_path=Path(database_path))
+    try:
+        description = connection.execute("DESCRIBE protein_sequences").fetchall()
+    finally:
+        connection.close()
+    columns = {str(row[0]) for row in description}
+    missing = sorted(REQUIRED_COLUMNS - columns)
+    if missing:
+        raise InputValidationError(
+            "Embedded protein-sequence relation lacks required columns: "
+            + "; ".join(missing)
+        )
+    return tuple(sorted(columns))
 
 
 def _validate_summary_filters(

@@ -470,7 +470,7 @@ def run_pipeline(
         expression_broad_fraction: Positive-context fraction called broad expression.
         expression_threads: Maximum DuckDB threads used for expression integration.
         expression_memory_mb: DuckDB memory bound before node-local spilling.
-        include_protein_sequences: Publish a complete-proteome Parquet sidecar.
+        include_protein_sequences: Embed complete-proteome sequences in DuckDB.
 
     Returns:
         Completed run manifest.
@@ -1136,7 +1136,7 @@ def _build_resource(
         expression_broad_fraction: Fraction of positive contexts called broad.
         expression_threads: Maximum expression integration threads.
         expression_memory_mb: Expression DuckDB memory bound in MiB.
-        include_protein_sequences: Publish the complete protein-sequence sidecar.
+        include_protein_sequences: Embed the complete protein-sequence relation.
 
     Returns:
         Complete resource manifest.
@@ -1382,6 +1382,10 @@ def _build_resource(
 
     with stages.record(stage="parquet_publication") as stage:
         parquet_tables = _publish_parquet(tables_dir=tables)
+        if include_protein_sequences:
+            parquet_tables["protein_sequences"] = (
+                evidence_dir / "protein_sequences.parquet"
+            )
         stage["details"] = f"relations={len(parquet_tables)}"
     with stages.record(stage="duckdb_publication") as stage:
         database_path = database_dir / "orthofinder_results.duckdb"
@@ -1389,7 +1393,15 @@ def _build_resource(
             database_path=database_path,
             parquet_tables=parquet_tables,
         )
-        stage["details"] = f"size_bytes={database_path.stat().st_size}"
+        removed_parquet_count = _remove_embedded_parquet_sources(
+            staging_root=staging,
+            paths=tuple(parquet_tables.values()),
+        )
+        stage["details"] = (
+            f"size_bytes={database_path.stat().st_size};"
+            f"embedded_relations={len(parquet_tables)};"
+            f"transient_parquet_removed={removed_parquet_count}"
+        )
     group_rows, overview_statistics = _load_report_group_statistics_and_aggregates(
         path=_table_path(tables_dir=tables, relation="group_statistics"),
         maximum=report_max_statistic_rows,
@@ -1470,7 +1482,8 @@ def _build_resource(
     if include_protein_sequences:
         run_metadata["protein_sequence_evidence"] = {
             "protein_count": protein_sequence_count,
-            "path": "evidence/protein_sequences.parquet",
+            "relation": "protein_sequences",
+            "database": "duckdb/orthofinder_results.duckdb",
             "identifier_authority": "WorkingDirectory/SequenceIDs.txt",
             "sequence_authority": "WorkingDirectory/Species*.fa",
         }
@@ -1513,7 +1526,8 @@ def _build_resource(
             ),
             "member_mapping": "tables/expression_member_mapping.tsv.gz",
             "member_summary": "tables/expression_member_summary.tsv.gz",
-            "context_evidence": "tables/expression_context.tsv.gz",
+            "context_evidence_relation": "expression_context",
+            "context_evidence_database": "duckdb/orthofinder_results.duckdb",
             "group_summary": "tables/expression_group_summary.tsv.gz",
             "import_audit": "tables/expression_import_audit.tsv.gz",
         }
@@ -1594,11 +1608,11 @@ def _build_resource(
     if include_protein_sequences:
         qc_rows.append(
             _qc(
-                "protein_sequence_sidecar_complete",
+                "protein_sequence_relation_complete",
                 protein_sequence_count == sequence_count,
                 protein_sequence_count,
                 sequence_count,
-                "Every SequenceIDs record reconciles to one complete-proteome FASTA row.",
+                "Every SequenceIDs record reconciles to one embedded complete-proteome row.",
             )
         )
     with stages.record(stage="quality_control") as stage:
@@ -2520,7 +2534,12 @@ def _unavailable_distance_summary(
 
 
 def _publish_parquet(*, tables_dir: Path) -> dict[str, Path]:
-    """Convert every TSV analytical authority into typed Parquet."""
+    """Return typed Parquet construction sources for every analytical relation.
+
+    Most compact relations are converted from their downloadable TSV authorities.
+    High-volume relations may already exist as typed Parquet so they never pass through
+    a delimiter-based intermediate representation.
+    """
 
     parquet_tables: dict[str, Path] = {}
     for tsv_path in sorted(tables_dir.glob("*.tsv.gz")):
@@ -2546,7 +2565,52 @@ def _publish_parquet(*, tables_dir: Path) -> dict[str, Path]:
             time.perf_counter() - started,
         )
         parquet_tables[relation] = parquet_path
+    for parquet_path in sorted(tables_dir.glob("*.parquet")):
+        relation = parquet_path.name.removesuffix(".parquet")
+        if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", relation) is None:
+            raise PublicationError(
+                f"Unsafe analytical Parquet relation name: {parquet_path.name!r}"
+            )
+        if relation in parquet_tables:
+            continue
+        if parquet_path.stat().st_size == 0:
+            raise PublicationError(f"Analytical Parquet source is empty: {parquet_path}")
+        _LOGGER.info(
+            "Direct Parquet construction source retained: relation=%s, bytes=%s",
+            relation,
+            f"{parquet_path.stat().st_size:,}",
+        )
+        parquet_tables[relation] = parquet_path
     return parquet_tables
+
+
+def _remove_embedded_parquet_sources(
+    *, staging_root: Path, paths: Sequence[Path]
+) -> int:
+    """Remove generated Parquet files after their DuckDB tables are checkpointed.
+
+    Args:
+        staging_root: Exact in-progress resource root containing generated sources.
+        paths: Parquet construction sources materialised in the completed DuckDB.
+
+    Returns:
+        Number of removed generated files.
+
+    Raises:
+        PublicationError: If any candidate is outside the staging resource.
+    """
+
+    root = Path(staging_root).expanduser().resolve()
+    removed = 0
+    for path in sorted({Path(value).expanduser().resolve() for value in paths}):
+        if not path.is_relative_to(root):
+            raise PublicationError(
+                f"Refusing to remove a Parquet source outside staging: {path}"
+            )
+        if path.is_file():
+            path.unlink()
+            removed += 1
+    return removed
 
 
 def _table_path(*, tables_dir: Path, relation: str) -> Path:

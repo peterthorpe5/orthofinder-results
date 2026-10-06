@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
+import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -18,6 +20,7 @@ from orthofinder_interrogation_app.terminal_motif import (
     motif_group_members,
     motif_group_summary,
     motif_species,
+    sequence_authority_available,
     validate_motif,
     validate_sequence_search,
     validate_sequence_sidecar,
@@ -161,6 +164,53 @@ def test_motif_queries_return_exact_hog_and_members(
                 motif="N",
                 **kwargs,
             )
+
+
+def test_motif_queries_use_embedded_sequences_without_a_sidecar(
+    application_resource: Path, tmp_path: Path
+) -> None:
+    """A standalone DuckDB retains complete motif functionality."""
+
+    resource_without_sequences = open_resource(path=application_resource)
+    assert not sequence_authority_available(resource=resource_without_sequences)
+    with pytest.raises(InputValidationError, match="No embedded protein-sequence"):
+        motif_species(resource=resource_without_sequences)
+    with pytest.raises(InputValidationError, match="No embedded protein-sequence"):
+        motif_group_summary(resource=resource_without_sequences, motif="N")
+
+    sidecar = _write_sidecar(path=tmp_path / "sequences.parquet")
+    database = tmp_path / "standalone.duckdb"
+    shutil.copy2(
+        application_resource / "duckdb/orthofinder_results.duckdb",
+        database,
+    )
+    connection = duckdb.connect(str(database))
+    try:
+        connection.execute(
+            "CREATE TABLE protein_sequences AS SELECT * FROM read_parquet(?)",
+            [str(sidecar)],
+        )
+    finally:
+        connection.close()
+    resource = open_resource(path=database)
+    assert sequence_authority_available(resource=resource)
+    assert motif_species(resource=resource) == ("Species_A", "Species_B")
+    rows = motif_group_summary(
+        resource=resource,
+        motif="N",
+        threshold=0.8,
+        minimum_species=2,
+        required_species=("Species_A", "Species_B"),
+        hierarchy_node="N0",
+    )
+    assert rows[0]["group_id"] == "N0.HOG1"
+    members = motif_group_members(
+        resource=resource,
+        motif="N",
+        group_id="N0.HOG1",
+    )
+    assert len(members) == 3
+    assert all(row["motif_match"] for row in members)
 
 
 def test_sequence_sidecar_builder_and_cli(orthofinder2_results: Path, tmp_path: Path) -> None:

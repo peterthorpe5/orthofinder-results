@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 import duckdb
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
@@ -125,10 +126,9 @@ def test_pipeline_publishes_queryable_offline_resource(
     assert '"distanceValues"' not in html
     assert re.search(r'(?:src|href)=["\']https?://', html, re.IGNORECASE) is None
     assert "amino_acid_p_distance_pairwise_deletion" in html
-    assert (output / "tables/hog_memberships.parquet").is_file()
     assert (output / "tables/hog_memberships.tsv.gz").is_file()
     assert not (output / "tables/hog_memberships.tsv").exists()
-    assert pq.read_table(output / "tables/group_statistics.parquet").num_rows > 0
+    assert not tuple((output / "tables").glob("*.parquet"))
 
     connection = duckdb.connect(str(output / "duckdb/orthofinder_results.duckdb"))
     try:
@@ -698,10 +698,16 @@ def test_io_round_trip_and_path_policy(tmp_path: Path, suffix: str) -> None:
     """Plain/compressed TSV, Parquet, DuckDB and checksums preserve a table."""
 
     tsv = tmp_path / f"values{suffix}"
+    text_value = 'annotation with\ttab, "quote" and\nnewline'
     assert (
-        write_tsv(path=tsv, fieldnames=("name", "count"), records=[{"name": "a", "count": 2}]) == 1
+        write_tsv(
+            path=tsv,
+            fieldnames=("name", "count"),
+            records=[{"name": text_value, "count": 2}],
+        )
+        == 1
     )
-    assert list(read_tsv(path=tsv))[0] == {"name": "a", "count": "2"}
+    assert list(read_tsv(path=tsv))[0] == {"name": text_value, "count": "2"}
     if suffix == ".tsv.gz":
         assert tsv.read_bytes()[:2] == b"\x1f\x8b"
     assert len(sha256_file(path=tsv)) == 64
@@ -712,6 +718,7 @@ def test_io_round_trip_and_path_policy(tmp_path: Path, suffix: str) -> None:
     connection = duckdb.connect(str(database))
     try:
         assert connection.execute("SELECT sum(count) FROM values").fetchone()[0] == 2
+        assert connection.execute("SELECT name FROM values").fetchone()[0] == text_value
     finally:
         connection.close()
     with pytest.raises(InputValidationError, match="temporary"):
@@ -730,6 +737,49 @@ def test_empty_tsv_and_invalid_duckdb_relation(tmp_path: Path) -> None:
     assert pq.read_table(parquet).num_rows == 0
     with pytest.raises(PublicationError, match="Unsafe"):
         create_duckdb(database_path=tmp_path / "bad.duckdb", parquet_tables={"bad-name": parquet})
+
+
+def test_embedded_parquet_sources_are_validated_and_removed_safely(
+    tmp_path: Path,
+) -> None:
+    """Direct construction sources stay bounded to the staging resource."""
+
+    staging = tmp_path / "resource.staging"
+    tables = staging / "tables"
+    tables.mkdir(parents=True)
+    direct = tables / "expression_context.parquet"
+    parquet_table = pa.table({"value": ["preserved"]})
+    pq.write_table(parquet_table, direct)
+    assert pipeline_module._publish_parquet(tables_dir=tables) == {
+        "expression_context": direct,
+    }
+
+    unsafe = tables / "unsafe-name.parquet"
+    pq.write_table(parquet_table, unsafe)
+    with pytest.raises(PublicationError, match="Unsafe analytical Parquet"):
+        pipeline_module._publish_parquet(tables_dir=tables)
+    unsafe.unlink()
+
+    empty = tables / "empty.parquet"
+    empty.touch()
+    with pytest.raises(PublicationError, match="source is empty"):
+        pipeline_module._publish_parquet(tables_dir=tables)
+    empty.unlink()
+
+    missing = tables / "already_absent.parquet"
+    assert pipeline_module._remove_embedded_parquet_sources(
+        staging_root=staging,
+        paths=(direct, missing),
+    ) == 1
+    assert not direct.exists()
+
+    outside = tmp_path / "outside.parquet"
+    pq.write_table(parquet_table, outside)
+    with pytest.raises(PublicationError, match="outside staging"):
+        pipeline_module._remove_embedded_parquet_sources(
+            staging_root=staging,
+            paths=(outside,),
+        )
 
 
 @pytest.mark.parametrize("suffix", [".tsv", ".tsv.gz"])

@@ -40,8 +40,8 @@ Each successful run creates one immutable output directory containing:
 - optional aligned-sequence pairwise distances and per-cluster distributions;
 - optional exact E3/focus selection, seed audit and one-row-per-cluster
   compressed result authority;
-- matching gzip-compressed TSV and typed Parquet tables;
-- a physical, portable DuckDB containing the same analytical relations;
+- gzip-compressed TSV authorities for compact tables and construction-time typed Parquet;
+- a physical, portable DuckDB containing every queryable analytical relation exactly once;
 - explicit QC checks, a complete run manifest and a persistent run log; and
 - a self-contained offline HTML report with linked distance, phylogeny,
   sparse-topology and comparative visual summaries.
@@ -86,8 +86,8 @@ scales while retaining raw counts on hover. Every quantitative chart has
 explicit axes, population and denominator wording.
 
 Browser visualisation is deliberately bounded. Large groups are selected and
-sampled deterministically for rendering, while the full compressed TSV, Parquet
-and DuckDB tables remain the analytical authorities. Only fields used by the
+sampled deterministically for rendering, while the full compressed TSV and DuckDB
+tables remain the analytical authorities. Only fields used by the
 browser are embedded. Exact pairwise distances are retained only for the bounded
 displayed matrices, alongside compact histograms and sparse neighbour edges. The
 default is 20,000 group summaries and the enforced ceiling is 50,000. Those
@@ -251,8 +251,10 @@ The dedicated page defaults to terminal asparagine and an 80% matching threshold
 while accepting any exact canonical amino-acid suffix, required focal species and
 minimum species breadth. Version 0.11.0 extends this to original orthogroups and
 explicitly enabled regular expressions either anywhere in the sequence or anchored at
-the C-terminus. New schema-5 resources embed the compact sequence Parquet built from
-the same OrthoFinder `SequenceIDs.txt` and `Species*.fa` authorities. Every analytical page
+the C-terminus. Version 0.11.1 embeds the reconciled sequences directly in DuckDB and
+retains support for older external sequence sidecars. New schema-5 resources build this
+authority from the same OrthoFinder `SequenceIDs.txt` and `Species*.fa` authorities. Every
+analytical page
 has a result-led interpretation dropdown, and each graph explanation includes common
 result patterns plus the quantitative view that should be checked next. Dedicated
 **Methods & provenance** and searchable **Glossary** pages explain the complete route
@@ -306,14 +308,14 @@ required focal species. Results include paired TSV/Excel tables, plot PDF and
 selected-HOG FASTA.
 
 New schema-5 resources built with `--include-protein-sequences` are self-contained;
-the launcher discovers `evidence/protein_sequences.parquet` automatically. Add the
+the launcher discovers the DuckDB `protein_sequences` relation automatically. Add the
 corrected Expression Atlas authority during construction with:
 
 ```bash
 orthofinder-results \
   --action dispersion-benchmark \
   --results-dir /path/to/Results_Feb26 \
-  --run-id results_feb26_motif_expression_v0_11_0 \
+  --run-id results_feb26_motif_expression_v0_11_1 \
   --output-dir /path/to/new_completed_resource \
   --expression-manifest /path/to/e3_workflow_expression_resources.tsv \
   --include-protein-sequences
@@ -647,9 +649,12 @@ formal output; every manifested file size and SHA-256 checksum is verified
 before that directory is atomically renamed into place. A formal output is
 therefore never exposed as complete while copying is still in progress.
 
-Analytical table authorities are streamed directly to `.tsv.gz`; a multi-GB
-uncompressed intermediate is not created. The gzip tables remain stream-readable
-and are converted to typed, Zstandard-compressed Parquet before DuckDB is built.
+Compact analytical authorities are streamed directly to `.tsv.gz`; a multi-GB
+uncompressed intermediate is not created. Those tables are converted through typed,
+Zstandard-compressed Parquet before DuckDB is built. High-volume expression contexts are
+written directly to typed Parquet so embedded tabs and newlines remain scalar values.
+After DuckDB materialisation and checkpointing, construction Parquet files are removed;
+the completed resource does not retain duplicate multi-gigabyte copies.
 
 On failure, the full traceback is written to the persistent Slurm error log and
 partial staging/copy directories are removed by default. Use

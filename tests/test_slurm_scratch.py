@@ -23,11 +23,17 @@ def _run_job_wrapper(
     package_root = Path(__file__).resolve().parents[1]
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
+    fake_prefix = tmp_path / "conda/envs/orthofinder_results"
+    (fake_prefix / "lib").mkdir(parents=True)
     capture = tmp_path / "conda_arguments.txt"
     fake_conda = fake_bin / "conda"
     fake_conda.write_text(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
+        "if [[ $# -eq 4 && $1 == run && $2 == --name && $4 == env ]]; then\n"
+        "  printf 'CONDA_PREFIX=%s\\n' \"$FAKE_CONDA_PREFIX\"\n"
+        "  exit 0\n"
+        "fi\n"
         "printf '%s\\n' \"$@\" > \"$CAPTURE_FILE\"\n",
         encoding="utf-8",
     )
@@ -37,6 +43,7 @@ def _run_job_wrapper(
     environment = {
         **os.environ,
         "CAPTURE_FILE": str(capture),
+        "FAKE_CONDA_PREFIX": str(fake_prefix),
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "SLURM_CPUS_PER_TASK": "8",
         "SLURM_JOB_ID": "12345",

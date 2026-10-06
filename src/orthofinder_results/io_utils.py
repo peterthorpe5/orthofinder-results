@@ -307,7 +307,12 @@ def tsv_to_parquet(
         reader = pacsv.open_csv(
             input_stream,
             read_options=pacsv.ReadOptions(block_size=block_size, use_threads=False),
-            parse_options=pacsv.ParseOptions(delimiter="\t", quote_char=False),
+            parse_options=pacsv.ParseOptions(
+                delimiter="\t",
+                quote_char='"',
+                double_quote=True,
+                newlines_in_values=True,
+            ),
             convert_options=pacsv.ConvertOptions(
                 column_types=arrow_types,
                 strings_can_be_null=False,

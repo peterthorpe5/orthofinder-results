@@ -213,7 +213,6 @@ for required_file in \
     tables/benchmark_individual_comparisons.tsv.gz \
     tables/benchmark_cluster_classifications.tsv.gz \
     tables/pairwise_distances.tsv.gz \
-    evidence/protein_sequences.parquet \
     duckdb/orthofinder_results.duckdb \
     qc/validation_checks.tsv; do
     [[ -s "$PERSISTENT_OUTPUT/$required_file" ]] || {
@@ -226,7 +225,6 @@ if [[ "$EXPRESSION_MANIFEST_SOURCE" != "-" ]]; then
         tables/expression_identifier_aliases.tsv.gz \
         tables/expression_member_mapping.tsv.gz \
         tables/expression_member_summary.tsv.gz \
-        tables/expression_context.tsv.gz \
         tables/expression_group_summary.tsv.gz \
         tables/expression_import_audit.tsv.gz; do
         [[ -s "$PERSISTENT_OUTPUT/$required_file" ]] || {
@@ -251,7 +249,6 @@ if [[ "$EXPRESSION_MANIFEST_SOURCE" != "-" ]]; then
         "$PERSISTENT_OUTPUT/tables/expression_identifier_aliases.tsv.gz" \
         "$PERSISTENT_OUTPUT/tables/expression_member_mapping.tsv.gz" \
         "$PERSISTENT_OUTPUT/tables/expression_member_summary.tsv.gz" \
-        "$PERSISTENT_OUTPUT/tables/expression_context.tsv.gz" \
         "$PERSISTENT_OUTPUT/tables/expression_group_summary.tsv.gz" \
         "$PERSISTENT_OUTPUT/tables/expression_import_audit.tsv.gz"
 fi
@@ -263,9 +260,9 @@ echo "Validated completed matched-background dispersion resource: $PERSISTENT_OU
 echo "Cluster statistics: $PERSISTENT_OUTPUT/tables/benchmark_cluster_results.tsv.gz"
 echo "Profile contrasts: $PERSISTENT_OUTPUT/tables/benchmark_contrasts.tsv.gz"
 echo "Individual comparisons: $PERSISTENT_OUTPUT/tables/benchmark_individual_comparisons.tsv.gz"
-echo "Protein sequence evidence: $PERSISTENT_OUTPUT/evidence/protein_sequences.parquet"
+echo "Protein sequence evidence: DuckDB relation protein_sequences"
 if [[ "$EXPRESSION_MANIFEST_SOURCE" != "-" ]]; then
-    echo "RNA-seq contexts: $PERSISTENT_OUTPUT/tables/expression_context.tsv.gz"
+    echo "RNA-seq contexts: DuckDB relation expression_context"
     echo "RNA-seq group summary: $PERSISTENT_OUTPUT/tables/expression_group_summary.tsv.gz"
 fi
 checksum_file "$PERSISTENT_OUTPUT/tables/benchmark_cluster_results.tsv.gz"

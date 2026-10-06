@@ -21,6 +21,7 @@ from orthofinder_results.expression_analysis import (
     _remove_empty_directory,
     _validate_atlas_rows,
     _write_query,
+    _write_query_parquet,
     publish_expression_evidence,
     read_expression_manifest,
 )
@@ -614,6 +615,40 @@ def test_expression_alias_and_output_edge_cases_are_explicit(tmp_path: Path) -> 
                 path=tmp_path / "wrong.tsv.gz",
                 fieldnames=CONTEXT_FIELDS,
             )
+        embedded_text = 'annotation with\ttab, "quote" and\nnewline'
+        connection.execute("INSERT INTO one_column VALUES (?)", [embedded_text])
+        context_parquet = tmp_path / "context.parquet"
+        assert (
+            _write_query_parquet(
+                connection=connection,
+                query="SELECT value FROM one_column",
+                path=context_parquet,
+                fieldnames=("value",),
+            )
+            == 1
+        )
+        assert (
+            connection.execute(
+                "SELECT value FROM read_parquet(?)", [str(context_parquet)]
+            ).fetchone()[0]
+            == embedded_text
+        )
+        assert (
+            _write_query_parquet(
+                connection=connection,
+                query="SELECT value FROM one_column",
+                path=context_parquet,
+                fieldnames=("value",),
+            )
+            == 1
+        )
+        with pytest.raises(PublicationError, match="query columns differ"):
+            _write_query_parquet(
+                connection=connection,
+                query="SELECT value FROM one_column",
+                path=tmp_path / "wrong.parquet",
+                fieldnames=("different",),
+            )
     finally:
         connection.close()
 
@@ -651,7 +686,19 @@ def test_expression_publication_keeps_mapping_states_and_preferred_units(
         "protein_two": "AMBIGUOUS",
         "sp|P11111|PROTA_SPECIES": "MAPPED_UNIQUE",
     }
-    contexts = tuple(read_tsv(path=tables / "expression_context.tsv.gz"))
+    context_connection = duckdb.connect()
+    try:
+        context_rows = context_connection.execute(
+            "SELECT expression_unit, expression_context "
+            "FROM read_parquet(?)",
+            [str(tables / "expression_context.parquet")],
+        ).fetchall()
+    finally:
+        context_connection.close()
+    contexts = tuple(
+        {"expression_unit": row[0], "expression_context": row[1]}
+        for row in context_rows
+    )
     assert {row["expression_unit"] for row in contexts} == {"TPM"}
     assert {row["expression_context"] for row in contexts} == {"leaf", "root"}
     summaries = tuple(read_tsv(path=tables / "expression_member_summary.tsv.gz"))
@@ -728,8 +775,9 @@ def test_pipeline_publishes_schema5_expression_and_sequence_resource(
     assert manifest_record["schema_version"] == 5
     assert manifest_record["counts"]["protein_sequence_count"] == 3
     assert manifest_record["counts"]["expression_unique_mapping_count"] == 1
-    assert (output / "evidence/protein_sequences.parquet").is_file()
-    assert (output / "tables/expression_context.tsv.gz").is_file()
+    assert not (output / "evidence/protein_sequences.parquet").exists()
+    assert not (output / "tables/expression_context.tsv.gz").exists()
+    assert not (output / "tables/expression_context.parquet").exists()
     published = json.loads((output / "run_manifest.json").read_text(encoding="utf-8"))
     assert published["rna_seq_expression"]["unit_selection_policy"].startswith("TPM")
     connection = duckdb.connect(
@@ -748,6 +796,8 @@ def test_pipeline_publishes_schema5_expression_and_sequence_resource(
             "expression_context",
             "expression_group_summary",
             "expression_import_audit",
+            "protein_sequences",
         }.issubset(relations)
+        assert connection.execute("SELECT count(*) FROM protein_sequences").fetchone()[0] == 3
     finally:
         connection.close()

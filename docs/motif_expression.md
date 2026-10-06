@@ -20,11 +20,13 @@ them demonstrates Cereblon binding, ubiquitination, protein accumulation or degr
 
 ## Sequence authority and search denominator
 
-`evidence/protein_sequences.parquet` is constructed from the same completed OrthoFinder
+The DuckDB `protein_sequences` relation is constructed from the same completed OrthoFinder
 run as the group tables. `WorkingDirectory/SequenceIDs.txt` supplies the exact internal,
 species and published member identifiers; `WorkingDirectory/Species*.fa` supplies the
 sequences. Publication fails unless every identifier reconciles to exactly one sequence.
 Each protein is stored once, rather than duplicated across every HOG hierarchy level.
+The viewer remains compatible with the external Parquet sequence sidecars produced for
+older schema-4 resources.
 
 The app distinguishes four quantities:
 
@@ -128,17 +130,20 @@ absence claim for species lacking evidence.
 
 | Output | Unit | Purpose |
 |---|---|---|
-| `evidence/protein_sequences.parquet` | protein | Exact complete-proteome sequence authority |
+| DuckDB `protein_sequences` | protein | Exact complete-proteome sequence authority |
 | `expression_identifier_aliases.tsv.gz` | protein alias | Auditable identifiers used for mapping |
 | `expression_member_mapping.tsv.gz` | protein | Unique, ambiguous or not-mapped state |
 | `expression_member_summary.tsv.gz` | protein | Experiments, contexts, range and broad-expression call |
-| `expression_context.tsv.gz` | protein/context | Unit-safe expression and biological metadata |
+| DuckDB `expression_context` | protein/context | Unit-safe expression and biological metadata |
 | `expression_group_summary.tsv.gz` | group | Mapping and observed-expression coverage |
 | `expression_import_audit.tsv.gz` | resource build | Source counts, thresholds and policies |
 
-Every expression TSV is also published as typed Parquet and a DuckDB relation. Visible tables
-have exact TSV and formatted-Excel downloads; every quantitative Plotly figure has a deferred
-PDF download.
+Small mapping, summary and audit tables are retained as compressed TSV and embedded as typed
+DuckDB relations. The high-volume expression-context and protein-sequence authorities are
+written through typed Parquet construction sources, materialised once in DuckDB and then
+removed from the completed resource. This prevents duplicate multi-gigabyte copies without
+changing any app query. Visible app tables have exact TSV and formatted-Excel downloads;
+every quantitative Plotly figure has a deferred PDF download.
 
 ## Performance and integrity boundary
 
@@ -153,6 +158,7 @@ download control is activated.
 
 Build and validate a new run ID beside the current resource. Do not delete the old directory
 before the new manifest is complete, every compressed table passes `gzip -t`, DuckDB opens
-read-only, the embedded sequence sidecar is non-empty and the app renders the motif, heatmap
+read-only, the embedded `protein_sequences` and `expression_context` relations are non-empty,
+and the app renders the motif, heatmap
 and UpSet views. After Mac transfer and checksum validation, the old resource can first be
 moved to a dated retirement directory. Permanent deletion should be a later explicit step.

@@ -350,11 +350,11 @@ GLOSSARY_ENTRIES = (
         "C-terminal motif; reviewed taxonomy; matching species",
     ),
     GlossaryEntry(
-        "Sequence sidecar",
+        "Protein-sequence authority",
         "Data and provenance",
-        "A compressed Parquet authority containing reconciled complete-proteome sequences.",
-        "Schema-5 resources embed it; older resources can use a companion built from the "
-        "same OrthoFinder identifiers and FASTA files.",
+        "A DuckDB relation containing reconciled complete-proteome sequences.",
+        "Schema-5 resources embed it once in DuckDB; older resources can use a compressed "
+        "Parquet companion built from the same OrthoFinder identifiers and FASTA files.",
         "SequenceIDs.txt; immutable resource; C-terminal motif",
     ),
     GlossaryEntry(
@@ -1399,14 +1399,14 @@ METHOD_STEPS = (
         (
             "The resource builder reconciles SequenceIDs.txt against every Species*.fa "
             "record from the same completed OrthoFinder run and stores each full protein "
-            "sequence once in compressed Parquet. The viewer joins these sequences to HOG "
+            "sequence once in DuckDB. The viewer joins these sequences to HOG "
             "or original-orthogroup membership and tests an exact C-terminal suffix or an "
             "explicitly enabled regular expression anywhere or at the C-terminus."
         ),
         "A one-sequence-per-protein authority supports flexible searches without duplicating "
         "sequences across hierarchy levels, and explicit regex activation prevents an exact "
         "motif from being reinterpreted silently.",
-        "Embedded atomic sequence Parquet, protein-level calls, taxonomic conservation "
+        "Embedded protein-sequence relation, protein-level calls, taxonomic conservation "
         "summaries, FASTA and table exports.",
         "Sequence-pattern conservation prioritises candidates; Cereblon recognition and "
         "degradation must be established experimentally.",
@@ -1434,9 +1434,11 @@ METHOD_STEPS = (
         15,
         "Immutable publication and read-only interrogation",
         (
-            "The pipeline published compressed TSV, typed Parquet, DuckDB, manifest, QC "
-            "and offline "
+            "The pipeline published compact compressed TSV authorities, one materialised "
+            "DuckDB, manifest, QC and offline "
             "report outputs through checksum validation and guarded atomic publication. "
+            "High-volume expression and sequence construction sources are removed after "
+            "the DuckDB checkpoint succeeds, avoiding duplicate multi-gigabyte copies. "
             "The Streamlit "
             "application validates and opens the completed DuckDB read-only."
         ),

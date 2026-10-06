@@ -138,7 +138,7 @@ The cluster scheduler must provide an absolute writable `TMPDIR`. The wrapper st
 the completed OrthoFinder source, packaged biological authorities and expression
 manifest there. Manifest paths continue to identify checksum-bound Atlas Parquet
 partitions on GPFS; DuckDB uses bounded memory and spills to node-local work space.
-The pipeline embeds the complete protein sequence sidecar, publishes the formal result
+The pipeline embeds the complete protein-sequence relation in DuckDB, publishes the formal result
 through its checksum-verified atomic publication layer and refuses an existing output.
 
 ## Machine-readable outputs
@@ -156,18 +156,21 @@ through its checksum-verified atomic publication layer and refuses an existing o
 | `benchmark_cluster_classifications.tsv.gz` | target cluster | Empirical classification against own controls |
 | `expression_member_mapping.tsv.gz` | protein | Exact species-scoped RNA-seq mapping state |
 | `expression_member_summary.tsv.gz` | protein | Context coverage and broad-expression screen |
-| `expression_context.tsv.gz` | protein/context | TPM-preferred or FPKM-fallback evidence and metadata |
+| DuckDB `expression_context` | protein/context | TPM-preferred or FPKM-fallback evidence and metadata |
 | `expression_group_summary.tsv.gz` | group | Mapping and observed-expression coverage |
-| `evidence/protein_sequences.parquet` | protein | Embedded exact/regex motif-search authority |
+| DuckDB `protein_sequences` | protein | Embedded exact/regex motif-search authority |
 
-The same relations are typed in Parquet and DuckDB. Pairwise rows are retained for
+Small tabular authorities remain compressed TSVs and typed DuckDB relations. High-volume
+expression contexts and protein sequences are materialised once in DuckDB; their temporary
+typed Parquet construction sources are removed after a successful database checkpoint.
+Pairwise rows are retained for
 biological target clusters so the application can render their full distance and
 tree visual suite. Matched-control pair matrices are summarised but not persisted,
 which prevents the database from expanding merely to support calibration.
 
 ## Application interpretation and gene downloads
 
-Viewer version 0.11.0 remains read-compatible with the existing schema-4 benchmark
+Viewer version 0.11.1 remains read-compatible with the existing schema-4 benchmark
 resource and opens the new schema-5 motif/expression resource. RNA-seq views require
 the schema-5 rebuild described above; the calibrated-dispersion page remains divided
 into three result-led tabs:

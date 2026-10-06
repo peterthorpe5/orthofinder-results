@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## 0.11.1 - 2026-10-06
+
+- Preserve quoted tabs, quotation marks and embedded newlines when converting compressed
+  TSV authorities to typed Parquet, fixing publication of free-text Expression Atlas
+  annotations.
+- Materialise the 100-million-row expression-context relation directly as typed Parquet
+  during construction, embed it in DuckDB and remove the temporary construction file after
+  the database checkpoint succeeds.
+- Embed reconciled protein sequences in DuckDB and retain support for older external
+  sequence sidecars, allowing the complete motif and RNA-seq viewer to open from one
+  standalone database file.
+- Stop publishing duplicate construction Parquet for relations already materialised in
+  DuckDB. Small compressed TSV audit and summary authorities remain in the full resource
+  for provenance and portable inspection.
+- Prepend the selected Conda environment's C++ runtime library path inside the launcher,
+  preventing compute-node DuckDB imports from resolving an older system `libstdc++`.
+- Make the Slurm completion contract validate the embedded `protein_sequences` and
+  `expression_context` relations rather than requiring obsolete large sidecar files.
+
 ## 0.11.0 - 2026-10-05
 
 - Generalise the motif page from exact C-terminal searches to both HOG and original

@@ -436,13 +436,13 @@ def publish_expression_evidence(
             path=tables_dir / "expression_member_summary.tsv.gz",
             fieldnames=SUMMARY_FIELDS,
         )
-        _write_query(
+        _write_query_parquet(
             connection=connection,
             query=(
                 "SELECT * FROM member_context ORDER BY species_label, member_id, "
                 "experiment_accession, expression_context"
             ),
-            path=tables_dir / "expression_context.tsv.gz",
+            path=tables_dir / "expression_context.parquet",
             fieldnames=CONTEXT_FIELDS,
         )
         _write_query(
@@ -952,7 +952,7 @@ def _tsv_query(*, path: Path) -> str:
     literal = str(Path(path).resolve()).replace("'", "''")
     return (
         f"read_csv('{literal}', delim='\\t', header=true, all_varchar=true, "
-        "compression='gzip', quote='')"
+        "compression='gzip', quote='\"', escape='\"')"
     )
 
 
@@ -978,6 +978,61 @@ def _write_query(
             yield from batch.to_pylist()
 
     return write_tsv(path=path, fieldnames=fieldnames, records=records())
+
+
+def _write_query_parquet(
+    *,
+    connection: duckdb.DuckDBPyConnection,
+    query: str,
+    path: Path,
+    fieldnames: tuple[str, ...],
+) -> int:
+    """Materialise one large typed query directly as compressed Parquet.
+
+    This path deliberately bypasses TSV for high-volume relations. Text fields may
+    legitimately contain tabs, quotes or newlines, all of which remain scalar Parquet
+    values rather than becoming structural delimiters during a second parse.
+
+    Args:
+        connection: Connection owning the trusted internal query relations.
+        query: Trusted internal SELECT statement with deterministic column order.
+        path: Destination Parquet path inside the staging resource.
+        fieldnames: Required ordered output headings.
+
+    Returns:
+        Number of materialised rows.
+
+    Raises:
+        PublicationError: If the query schema differs or publication is incomplete.
+    """
+
+    cursor = connection.execute(f"SELECT * FROM ({query}) AS source LIMIT 0")
+    observed = tuple(str(column[0]) for column in cursor.description)
+    if observed != fieldnames:
+        raise PublicationError(
+            f"Expression query columns differ: observed={observed}; expected={fieldnames}"
+        )
+    destination = Path(path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        destination.unlink()
+    connection.execute(
+        f"COPY ({query}) TO ? "
+        "(FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 122880)",
+        [str(destination)],
+    )
+    if not destination.is_file() or destination.stat().st_size == 0:
+        raise PublicationError(f"Expression Parquet publication is empty: {destination}")
+    return _scalar_int(
+        connection,
+        "SELECT count(*) FROM read_parquet(" + _sql_literal(str(destination)) + ")",
+    )
+
+
+def _sql_literal(value: str) -> str:
+    """Return one safely quoted SQL string literal for a trusted file path."""
+
+    return "'" + str(value).replace("'", "''") + "'"
 
 
 def _row_count(

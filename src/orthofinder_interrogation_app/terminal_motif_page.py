@@ -42,6 +42,7 @@ from .terminal_motif import (
     motif_group_summary,
     motif_hierarchy_nodes,
     motif_species,
+    sequence_authority_available,
     validate_sequence_search,
     validate_sequence_sidecar,
 )
@@ -105,12 +106,14 @@ def render_terminal_motif_page(
         "calculated over a transparent primary species set; other lineages remain "
         "available as independent comparison evidence."
     )
-    if not sidecar_path_text.strip():
+    sidecar = Path(sidecar_path_text) if sidecar_path_text.strip() else None
+    if not sequence_authority_available(resource=resource, sidecar_path=sidecar):
         _render_setup_state()
         return
     try:
-        sidecar = validate_sequence_sidecar(path=Path(sidecar_path_text))
-        species = motif_species(sidecar_path=sidecar)
+        if sidecar is not None:
+            sidecar = validate_sequence_sidecar(path=sidecar)
+        species = motif_species(resource=resource, sidecar_path=sidecar)
         authority = _load_taxonomy(
             species=species,
             taxonomy_path_text=taxonomy_path_text,
@@ -521,7 +524,7 @@ def _render_selected_group(
     *,
     rows: Sequence[Mapping[str, Any]],
     resource: ResourceIdentity,
-    sidecar: Path,
+    sidecar: Path | None,
     search: SequenceSearch,
     group_type: str,
     hierarchy_node: str,
