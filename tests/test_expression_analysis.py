@@ -778,6 +778,11 @@ def test_pipeline_publishes_schema5_expression_and_sequence_resource(
     assert not (output / "evidence/protein_sequences.parquet").exists()
     assert not (output / "tables/expression_context.tsv.gz").exists()
     assert not (output / "tables/expression_context.parquet").exists()
+    stages = [row["stage"] for row in read_tsv(path=output / "logs/stage_metrics.tsv")]
+    assert stages.index("rna_seq_expression_evidence") < stages.index(
+        "protein_sequence_sidecar"
+    )
+    assert stages.index("protein_sequence_sidecar") < stages.index("duckdb_publication")
     published = json.loads((output / "run_manifest.json").read_text(encoding="utf-8"))
     assert published["rna_seq_expression"]["unit_selection_policy"].startswith("TPM")
     connection = duckdb.connect(

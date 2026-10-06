@@ -170,7 +170,7 @@ which prevents the database from expanding merely to support calibration.
 
 ## Application interpretation and gene downloads
 
-Viewer version 0.11.1 remains read-compatible with the existing schema-4 benchmark
+Viewer version 0.11.2 remains read-compatible with the existing schema-4 benchmark
 resource and opens the new schema-5 motif/expression resource. RNA-seq views require
 the schema-5 rebuild described above; the calibrated-dispersion page remains divided
 into three result-led tabs:

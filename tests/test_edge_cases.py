@@ -233,6 +233,18 @@ def test_io_failure_branches_and_scalar_types(tmp_path: Path) -> None:
             database_path=tmp_path / "missing.duckdb",
             parquet_tables={"valid_name": missing},
         )
+    with pytest.raises(InputValidationError, match="threads"):
+        create_duckdb(
+            database_path=tmp_path / "threads.duckdb",
+            parquet_tables={},
+            threads=0,
+        )
+    with pytest.raises(InputValidationError, match="memory limit"):
+        create_duckdb(
+            database_path=tmp_path / "memory.duckdb",
+            parquet_tables={},
+            memory_limit_mb=128,
+        )
 
 
 def test_layout_optional_and_version_branches(tmp_path: Path) -> None:
@@ -649,5 +661,24 @@ def test_atomic_json_and_existing_database_replacement(tmp_path: Path) -> None:
     tsv_to_parquet(tsv_path=tsv, parquet_path=parquet, column_types={"value": "int64"})
     database = tmp_path / "database.duckdb"
     create_duckdb(database_path=database, parquet_tables={"table_values": parquet})
-    create_duckdb(database_path=database, parquet_tables={"table_values": parquet})
+    spill = tmp_path / "duckdb_spill"
+    create_duckdb(
+        database_path=database,
+        parquet_tables={"table_values": parquet},
+        threads=1,
+        memory_limit_mb=256,
+        temp_directory=spill,
+    )
     assert database.is_file()
+    assert not spill.exists()
+    occupied_spill = tmp_path / "occupied_spill"
+    occupied_spill.mkdir()
+    (occupied_spill / "unrelated.txt").write_text("retain", encoding="utf-8")
+    with pytest.raises(PublicationError, match="spill directory must be empty"):
+        create_duckdb(
+            database_path=tmp_path / "occupied.duckdb",
+            parquet_tables={"table_values": parquet},
+            threads=1,
+            memory_limit_mb=256,
+            temp_directory=occupied_spill,
+        )

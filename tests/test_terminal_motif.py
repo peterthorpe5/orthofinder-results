@@ -10,7 +10,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from orthofinder_interrogation_app import terminal_motif_page
+from orthofinder_interrogation_app import terminal_motif_cli, terminal_motif_page
 from orthofinder_interrogation_app.resource import open_resource
 from orthofinder_interrogation_app.taxonomy import TaxonomyAuthority, TaxonomyRecord
 from orthofinder_interrogation_app.terminal_motif import (
@@ -238,6 +238,84 @@ def test_sequence_sidecar_builder_and_cli(orthofinder2_results: Path, tmp_path: 
             results_dir=orthofinder2_results,
             output_path=tmp_path / "wrong.tsv",
         )
+
+
+def test_sequence_sidecar_builder_writes_bounded_batches(
+    orthofinder2_results: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Complete proteomes are never assembled into one Arrow table."""
+
+    working = orthofinder2_results / "WorkingDirectory"
+    (working / "Species0.fa").write_text(">0_0\nMAAN\n>0_1\nMQQN\n", encoding="utf-8")
+    (working / "Species1.fa").write_text(">1_0\nMTTA\n", encoding="utf-8")
+    observed_batch_sizes: list[int] = []
+    original = terminal_motif_cli._write_sequence_batch
+    monkeypatch.setattr(terminal_motif_cli, "_PROGRESS_INTERVAL", 2)
+
+    def track_batch(**kwargs: object) -> int:
+        records = kwargs["records"]
+        assert isinstance(records, list)
+        observed_batch_sizes.append(len(records))
+        return original(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(terminal_motif_cli, "_write_sequence_batch", track_batch)
+    output = tmp_path / "streamed.parquet"
+    assert (
+        build_sequence_sidecar(
+            results_dir=orthofinder2_results,
+            output_path=output,
+            batch_size=2,
+        )
+        == 3
+    )
+    assert observed_batch_sizes == [2, 1]
+    assert pq.read_table(output).num_rows == 3
+    with pytest.raises(InputValidationError, match="batch size"):
+        build_sequence_sidecar(
+            results_dir=orthofinder2_results,
+            output_path=tmp_path / "invalid.parquet",
+            batch_size=0,
+        )
+
+
+@pytest.mark.parametrize(
+    ("contents", "message"),
+    [
+        ("\n\n", "no complete sequences"),
+        (">\nMAA\n", "Empty FASTA identifier"),
+        ("MAA\n", "Sequence precedes"),
+        (">first\n>second\nMAA\n", "empty sequence"),
+        (">first\nMAA\n>first\nMQQ\n", "Duplicate FASTA identifier"),
+        (">first\n", "empty sequence"),
+    ],
+)
+def test_streaming_fasta_reader_rejects_malformed_records(
+    tmp_path: Path,
+    contents: str,
+    message: str,
+) -> None:
+    """The bounded FASTA iterator retains the original fail-closed contract."""
+
+    fasta = tmp_path / "malformed.fa"
+    fasta.write_text(contents, encoding="utf-8")
+    with pytest.raises(InputValidationError, match=message):
+        tuple(terminal_motif_cli._iter_fasta_records(path=fasta))
+
+
+def test_streaming_fasta_reader_handles_whitespace_and_missing_files(
+    tmp_path: Path,
+) -> None:
+    """Whitespace is normalised while unavailable FASTA inputs remain explicit."""
+
+    fasta = tmp_path / "valid.fa"
+    fasta.write_text("\n>protein description\nma a\n\n", encoding="utf-8")
+    assert tuple(terminal_motif_cli._iter_fasta_records(path=fasta)) == (
+        ("protein", "MAA"),
+    )
+    with pytest.raises(InputValidationError, match="Missing or empty FASTA"):
+        tuple(terminal_motif_cli._iter_fasta_records(path=tmp_path / "missing.fa"))
 
 
 def test_taxonomic_hog_filter_uses_reviewed_descendants() -> None:

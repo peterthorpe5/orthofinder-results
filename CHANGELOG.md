@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.11.2 - 2026-10-06
+
+- Fix the confirmed 96 GiB Slurm memory failure by streaming complete-proteome
+  sequences into typed Parquet in bounded 25,000-protein batches instead of retaining
+  all 1.4 million sequences, Python records and one monolithic Arrow table in memory.
+- Run RNA-seq integration before sequence publication so Arrow allocator memory from
+  the sequence stage cannot raise the expression stage's starting resident set.
+- Apply the configured thread and memory limits to final DuckDB publication, allow
+  DuckDB to spill construction work beneath scheduler-local storage and log relation
+  progress and row counts for operational diagnosis.
+- Add regression coverage for bounded sequence batches, malformed or duplicate FASTA
+  records, stage ordering, DuckDB resource controls and safe spill-directory cleanup.
+- Leave the sequence, expression, motif, dispersion and statistical contracts unchanged;
+  this is an execution-memory correction and requires a fresh schema-5 resource build.
+
 ## 0.11.1 - 2026-10-06
 
 - Preserve quoted tabs, quotation marks and embedded newlines when converting compressed

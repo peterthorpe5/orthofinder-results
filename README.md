@@ -253,8 +253,14 @@ minimum species breadth. Version 0.11.0 extends this to original orthogroups and
 explicitly enabled regular expressions either anywhere in the sequence or anchored at
 the C-terminus. Version 0.11.1 embeds the reconciled sequences directly in DuckDB and
 retains support for older external sequence sidecars. New schema-5 resources build this
-authority from the same OrthoFinder `SequenceIDs.txt` and `Species*.fa` authorities. Every
-analytical page
+authority from the same OrthoFinder `SequenceIDs.txt` and `Species*.fa` authorities.
+Version 0.11.2 keeps that schema and analysis unchanged while bounding construction memory:
+RNA-seq integration runs before sequence publication, sequences are written in batches of
+25,000 proteins, and final DuckDB materialisation uses the configured memory limit with
+node-local spill space. This corrects the observed 96 GiB Slurm ceiling without requiring
+a larger allocation.
+
+Every analytical page
 has a result-led interpretation dropdown, and each graph explanation includes common
 result patterns plus the quantitative view that should be checked next. Dedicated
 **Methods & provenance** and searchable **Glossary** pages explain the complete route

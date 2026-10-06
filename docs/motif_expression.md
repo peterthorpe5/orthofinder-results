@@ -28,6 +28,12 @@ Each protein is stored once, rather than duplicated across every HOG hierarchy l
 The viewer remains compatible with the external Parquet sequence sidecars produced for
 older schema-4 resources.
 
+Resource construction streams the FASTA authority directly into typed Parquet batches of
+at most 25,000 proteins. It does not retain the complete 1.4-million-protein sequence set,
+a duplicate list of Python records and one monolithic Arrow table at the same time. RNA-seq
+integration is deliberately completed before this sequence publication stage so native
+Arrow allocator memory cannot raise the expression analysis's starting resident set.
+
 The app distinguishes four quantities:
 
 1. all published members of the selected group;
@@ -144,6 +150,14 @@ written through typed Parquet construction sources, materialised once in DuckDB 
 removed from the completed resource. This prevents duplicate multi-gigabyte copies without
 changing any app query. Visible app tables have exact TSV and formatted-Excel downloads;
 every quantitative Plotly figure has a deferred PDF download.
+
+Final DuckDB publication uses the same explicit thread and memory controls as expression
+integration. If a relation cannot be materialised within that buffer-manager limit, DuckDB
+may spill temporary construction data to a dedicated directory beneath the scheduler-local
+work resource. The directory must start empty and must be empty after the final checkpoint;
+publication otherwise fails closed. Progress logs identify each relation, source size and
+materialised row count. These controls bound database construction without changing stored
+values, identifiers or analytical denominators.
 
 ## Performance and integrity boundary
 

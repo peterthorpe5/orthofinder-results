@@ -342,34 +342,85 @@ def tsv_to_parquet(
     return row_count
 
 
-def create_duckdb(*, database_path: Path, parquet_tables: Mapping[str, Path]) -> None:
+def create_duckdb(
+    *,
+    database_path: Path,
+    parquet_tables: Mapping[str, Path],
+    threads: int | None = None,
+    memory_limit_mb: int | None = None,
+    temp_directory: Path | None = None,
+) -> None:
     """Create a portable DuckDB containing materialised Parquet relations.
 
     Args:
         database_path: Destination DuckDB file.
         parquet_tables: Relation names and source Parquet paths.
+        threads: Optional maximum DuckDB worker count.
+        memory_limit_mb: Optional DuckDB buffer-manager limit in MiB.
+        temp_directory: Optional bounded-work spill directory.
 
     Raises:
-        PublicationError: If a relation name is unsafe or a Parquet source is absent.
+        InputValidationError: If a supplied resource bound is invalid.
+        PublicationError: If a relation name, source or spill cleanup is invalid.
     """
 
     import duckdb
 
+    if threads is not None and (
+        isinstance(threads, bool) or not isinstance(threads, int) or threads < 1
+    ):
+        raise InputValidationError("DuckDB publication threads must be a positive integer.")
+    if memory_limit_mb is not None and (
+        isinstance(memory_limit_mb, bool)
+        or not isinstance(memory_limit_mb, int)
+        or memory_limit_mb < 256
+    ):
+        raise InputValidationError(
+            "DuckDB publication memory limit must be at least 256 MiB."
+        )
     destination = Path(database_path).expanduser().resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists():
         destination.unlink()
+    spill = Path(temp_directory).expanduser().resolve() if temp_directory is not None else None
+    if spill is not None:
+        spill.mkdir(parents=True, exist_ok=True)
+        if any(spill.iterdir()):
+            raise PublicationError(
+                f"DuckDB spill directory must be empty before publication: {spill}"
+            )
     connection = duckdb.connect(str(destination))
+    completed = False
     try:
+        if threads is not None:
+            connection.execute(f"SET threads = {threads}")
+        if memory_limit_mb is not None:
+            connection.execute(f"SET memory_limit = '{memory_limit_mb}MB'")
+        if spill is not None:
+            connection.execute("SET temp_directory = ?", [str(spill)])
+        connection.execute("SET preserve_insertion_order = false")
         for relation, parquet_path in sorted(parquet_tables.items()):
             if _RELATION_PATTERN.fullmatch(relation) is None:
                 raise PublicationError(f"Unsafe DuckDB relation name: {relation!r}")
             source = Path(parquet_path).expanduser().resolve()
             if not source.is_file():
                 raise PublicationError(f"Missing Parquet source for {relation}: {source}")
+            _LOGGER.info(
+                "DuckDB relation materialisation started: relation=%s, parquet_bytes=%s",
+                relation,
+                f"{source.stat().st_size:,}",
+            )
             connection.execute(
                 f'CREATE TABLE "{relation}" AS SELECT * FROM read_parquet(?)',
                 [str(source)],
+            )
+            row_count = connection.execute(
+                f'SELECT count(*) FROM "{relation}"'
+            ).fetchone()[0]
+            _LOGGER.info(
+                "DuckDB relation materialisation finished: relation=%s, rows=%s",
+                relation,
+                f"{int(row_count):,}",
             )
         connection.execute(
             "CREATE TABLE resource_metadata AS "
@@ -377,8 +428,16 @@ def create_duckdb(*, database_path: Path, parquet_tables: Mapping[str, Path]) ->
             [utc_now_iso(), __schema_version__],
         )
         connection.execute("CHECKPOINT")
+        completed = True
     finally:
         connection.close()
+    if completed and spill is not None and spill.exists():
+        try:
+            spill.rmdir()
+        except OSError as error:
+            raise PublicationError(
+                f"DuckDB spill directory was not empty after checkpoint: {spill}"
+            ) from error
 
 
 def _tsv_scalar(value: Any) -> Any:

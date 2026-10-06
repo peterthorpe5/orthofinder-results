@@ -1211,14 +1211,6 @@ def _build_resource(
             species_from_groups=species_from_groups,
         )
         stage["details"] = f"species={species_count};sequences={sequence_count}"
-    protein_sequence_count = 0
-    if include_protein_sequences:
-        with stages.record(stage="protein_sequence_sidecar") as stage:
-            protein_sequence_count = build_sequence_sidecar(
-                results_dir=layout.results_dir,
-                output_path=evidence_dir / "protein_sequences.parquet",
-            )
-            stage["details"] = f"proteins={protein_sequence_count}"
     expression_publication: ExpressionPublication | None = None
     if expression_authority is not None:
         with stages.record(stage="rna_seq_expression_evidence") as stage:
@@ -1237,6 +1229,14 @@ def _build_resource(
                 f"{key}={value}"
                 for key, value in sorted(expression_publication.counts.items())
             )
+    protein_sequence_count = 0
+    if include_protein_sequences:
+        with stages.record(stage="protein_sequence_sidecar") as stage:
+            protein_sequence_count = build_sequence_sidecar(
+                results_dir=layout.results_dir,
+                output_path=evidence_dir / "protein_sequences.parquet",
+            )
+            stage["details"] = f"proteins={protein_sequence_count}"
     focus_selection: FocusSelection | None = None
     if focus_authority is not None:
         with stages.record(stage="e3_focus_selection") as stage:
@@ -1392,6 +1392,9 @@ def _build_resource(
         create_duckdb(
             database_path=database_path,
             parquet_tables=parquet_tables,
+            threads=expression_threads,
+            memory_limit_mb=expression_memory_mb,
+            temp_directory=staging / "duckdb_publication_spill",
         )
         removed_parquet_count = _remove_embedded_parquet_sources(
             staging_root=staging,
