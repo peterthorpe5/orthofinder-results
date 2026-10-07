@@ -254,11 +254,11 @@ explicitly enabled regular expressions either anywhere in the sequence or anchor
 the C-terminus. Version 0.11.1 embeds the reconciled sequences directly in DuckDB and
 retains support for older external sequence sidecars. New schema-5 resources build this
 authority from the same OrthoFinder `SequenceIDs.txt` and `Species*.fa` authorities.
-Version 0.11.2 keeps that schema and analysis unchanged while bounding construction memory:
-RNA-seq integration runs before sequence publication, sequences are written in batches of
-25,000 proteins, and final DuckDB materialisation uses the configured memory limit with
-node-local spill space. This corrects the observed 96 GiB Slurm ceiling without requiring
-a larger allocation.
+Version 0.11.2 bounds complete-proteome batches and final DuckDB materialisation. Version
+0.11.3 additionally parses each OrthoFinder membership source in a fresh process and merges
+validated fragments through bounded buffers. This prevents allocator memory retained across
+the hierarchy levels from accumulating to the scheduler limit. Worker and parent peak RSS
+values are written to the build log; schema 5 and all analytical values remain unchanged.
 
 Every analytical page
 has a result-led interpretation dropdown, and each graph explanation includes common

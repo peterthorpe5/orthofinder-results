@@ -153,8 +153,8 @@ every quantitative Plotly figure has a deferred PDF download.
 
 Final DuckDB publication uses the same explicit thread and memory controls as expression
 integration. If a relation cannot be materialised within that buffer-manager limit, DuckDB
-may spill temporary construction data to a dedicated directory beneath the scheduler-local
-work resource. The directory must start empty and must be empty after the final checkpoint;
+may spill temporary construction data to a dedicated directory beneath scheduler-local
+work storage. The directory must start empty and must be empty after the final checkpoint;
 publication otherwise fails closed. Progress logs identify each relation, source size and
 materialised row count. These controls bound database construction without changing stored
 values, identifiers or analytical denominators.

@@ -41,13 +41,12 @@ if [[ -n "$CONDA_ENV" ]]; then
         echo "ERROR: could not resolve the library directory for Conda environment ${CONDA_ENV}." >&2
         exit 2
     }
-    CONDA_LIBRARY_PATH="$CONDA_PREFIX_PATH/lib"
-    if [[ -n "${LD_LIBRARY_PATH:-}" ]]; then
-        CONDA_LIBRARY_PATH="$CONDA_LIBRARY_PATH:$LD_LIBRARY_PATH"
-    fi
     exec conda run --no-capture-output --name "$CONDA_ENV" \
-        env LD_LIBRARY_PATH="$CONDA_LIBRARY_PATH" \
+        env \
+        LD_LIBRARY_PATH="$CONDA_PREFIX_PATH/lib" \
+        MALLOC_ARENA_MAX=2 \
         "$PYTHON_EXECUTABLE" -m orthofinder_results "${PACKAGE_ARGS[@]}"
 fi
 
-exec "$PYTHON_EXECUTABLE" -m orthofinder_results "${PACKAGE_ARGS[@]}"
+exec env MALLOC_ARENA_MAX=2 \
+    "$PYTHON_EXECUTABLE" -m orthofinder_results "${PACKAGE_ARGS[@]}"

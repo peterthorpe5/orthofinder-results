@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.11.3 - 2026-10-07
+
+- Fix the independently confirmed 96 GiB Slurm failure during hierarchical-membership
+  publication by parsing every legacy/HOG source table in a fresh short-lived Python
+  process, then merging row-count-validated fragments through bounded buffers.
+- Record the process identifier and peak resident memory for every source worker together
+  with the parent process peak, making allocator growth and any future native failure
+  visible in the persistent stage log.
+- Bound glibc allocator arenas and isolate the selected Conda environment's C++ runtime
+  from inherited system library paths, removing the stale `/lib` suffix observed in the
+  failed cluster command.
+- Carry forward the version-0.11.2 bounded sequence batches, stage ordering and DuckDB
+  construction limits so the repair covers the complete resource-build path.
+- Preserve schema 5, all biological authorities, analytical values, statistics and viewer
+  behaviour; this is a construction-memory correction requiring a fresh resource build.
+
 ## 0.11.2 - 2026-10-06
 
 - Fix the confirmed 96 GiB Slurm memory failure by streaming complete-proteome

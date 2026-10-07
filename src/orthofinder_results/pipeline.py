@@ -68,21 +68,15 @@ from .io_utils import (
     write_tsv,
 )
 from .layout import discover_layout
+from .membership_publication import publish_membership_tables
 from .models import ResultLayout
 from .parsers import (
-    MEMBERSHIP_FIELDS,
     SEQUENCE_FIELDS,
     SPECIES_FIELDS,
-    iter_memberships,
     iter_sequence_ids,
     read_species_ids,
 )
 from .report import build_interactive_report
-from .statistics import (
-    GROUP_SPECIES_STATISTIC_FIELDS,
-    GROUP_STATISTIC_FIELDS,
-    GroupAccumulator,
-)
 from .trees import (
     TREE_EDGE_FIELDS,
     TREE_INVENTORY_FIELDS,
@@ -1719,180 +1713,20 @@ def _build_resource(
 def _publish_memberships(
     *, tables_dir: Path, layout: ResultLayout, run_id: str
 ) -> tuple[dict[str, int], int, int, set[str]]:
-    """Publish long-form membership tables and streaming group statistics."""
+    """Publish memberships with allocator isolation between source tables."""
 
-    statistics_path = _table_path(tables_dir=tables_dir, relation="group_statistics")
-    counts = {"legacy_orthogroup_membership_count": 0, "hog_membership_count": 0}
-    group_count = 0
-    group_species_count = 0
-    species: set[str] = set()
-    species_statistics_path = _table_path(
+    legacy_sources = (
+        []
+        if layout.orthogroups_path is None
+        else [(layout.orthogroups_path, "LEGACY_ORTHOGROUP", "")]
+    )
+    hog_sources = [(path, "HOG", path.stem) for path in layout.hog_paths]
+    return publish_membership_tables(
         tables_dir=tables_dir,
-        relation="group_species_statistics",
+        legacy_sources=legacy_sources,
+        hog_sources=hog_sources,
+        run_id=run_id,
     )
-    with (
-        open_text(path=statistics_path, mode="w") as stats_handle,
-        open_text(path=species_statistics_path, mode="w") as species_stats_handle,
-    ):
-        stats_writer = csv.DictWriter(
-            stats_handle,
-            fieldnames=GROUP_STATISTIC_FIELDS,
-            delimiter="\t",
-            lineterminator="\n",
-        )
-        stats_writer.writeheader()
-        species_stats_writer = csv.DictWriter(
-            species_stats_handle,
-            fieldnames=GROUP_SPECIES_STATISTIC_FIELDS,
-            delimiter="\t",
-            lineterminator="\n",
-        )
-        species_stats_writer.writeheader()
-        legacy_sources = (
-            []
-            if layout.orthogroups_path is None
-            else [(layout.orthogroups_path, "LEGACY_ORTHOGROUP", "")]
-        )
-        count, groups, group_species_rows = _write_membership_authority(
-            path=_table_path(
-                tables_dir=tables_dir,
-                relation="legacy_orthogroup_memberships",
-            ),
-            sources=legacy_sources,
-            run_id=run_id,
-            statistics_writer=stats_writer,
-            species_statistics_writer=species_stats_writer,
-            species=species,
-        )
-        counts["legacy_orthogroup_membership_count"] = count
-        group_count += groups
-        group_species_count += group_species_rows
-        hog_sources = [(path, "HOG", path.stem) for path in layout.hog_paths]
-        count, groups, group_species_rows = _write_membership_authority(
-            path=_table_path(tables_dir=tables_dir, relation="hog_memberships"),
-            sources=hog_sources,
-            run_id=run_id,
-            statistics_writer=stats_writer,
-            species_statistics_writer=species_stats_writer,
-            species=species,
-        )
-        counts["hog_membership_count"] = count
-        group_count += groups
-        group_species_count += group_species_rows
-    _LOGGER.info(
-        "Published %s memberships across %s run-scoped groups.",
-        f"{sum(counts.values()):,}",
-        f"{group_count:,}",
-    )
-    return counts, group_count, group_species_count, species
-
-
-def _write_membership_authority(
-    *,
-    path: Path,
-    sources: Sequence[tuple[Path, str, str]],
-    run_id: str,
-    statistics_writer: csv.DictWriter,
-    species_statistics_writer: csv.DictWriter,
-    species: set[str],
-) -> tuple[int, int, int]:
-    """Stream related source tables to one membership authority and statistics sink."""
-
-    member_count = 0
-    group_count = 0
-    group_species_count = 0
-    with open_text(path=path, mode="w") as handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=MEMBERSHIP_FIELDS,
-            delimiter="\t",
-            lineterminator="\n",
-        )
-        writer.writeheader()
-        for source, group_type, hierarchy_node in sources:
-            source_started = time.perf_counter()
-            source_member_start = member_count
-            _LOGGER.info(
-                "Membership source started: type=%s, node=%s, file=%s",
-                group_type,
-                hierarchy_node or "ROOT",
-                source,
-            )
-            current_key: tuple[str, str, str] | None = None
-            accumulator: GroupAccumulator | None = None
-            for row in iter_memberships(
-                path=source,
-                run_id=run_id,
-                group_type=group_type,
-                hierarchy_node=hierarchy_node,
-            ):
-                key = (group_type, hierarchy_node, str(row["group_id"]))
-                if key != current_key:
-                    if accumulator is not None:
-                        _write_accumulator_statistics(
-                            accumulator=accumulator,
-                            statistics_writer=statistics_writer,
-                            species_statistics_writer=species_statistics_writer,
-                        )
-                        group_count += 1
-                        group_species_count += len(accumulator.species_counts)
-                    accumulator = GroupAccumulator(
-                        run_id=run_id,
-                        group_type=group_type,
-                        hierarchy_node=hierarchy_node,
-                        group_id=str(row["group_id"]),
-                        legacy_orthogroup_id=str(row["legacy_orthogroup_id"]),
-                        gene_tree_parent_clade=str(row["gene_tree_parent_clade"]),
-                        source_file=str(row["source_file"]),
-                    )
-                    current_key = key
-                if accumulator is None:  # pragma: no cover - guarded by key transition
-                    raise AssertionError("Membership accumulator was not initialised.")
-                accumulator.add_member(species_label=str(row["species_label"]))
-                species.add(str(row["species_label"]))
-                writer.writerow(row)
-                member_count += 1
-                source_members = member_count - source_member_start
-                if source_members % 1_000_000 == 0:
-                    elapsed = max(time.perf_counter() - source_started, 0.001)
-                    _LOGGER.info(
-                        "Membership source progress: type=%s, node=%s, rows=%s, "
-                        "rows_per_second=%.1f",
-                        group_type,
-                        hierarchy_node or "ROOT",
-                        f"{source_members:,}",
-                        source_members / elapsed,
-                    )
-            if accumulator is not None:
-                _write_accumulator_statistics(
-                    accumulator=accumulator,
-                    statistics_writer=statistics_writer,
-                    species_statistics_writer=species_statistics_writer,
-                )
-                group_count += 1
-                group_species_count += len(accumulator.species_counts)
-            source_members = member_count - source_member_start
-            _LOGGER.info(
-                "Membership source finished: type=%s, node=%s, rows=%s, "
-                "elapsed_seconds=%.3f",
-                group_type,
-                hierarchy_node or "ROOT",
-                f"{source_members:,}",
-                time.perf_counter() - source_started,
-            )
-    return member_count, group_count, group_species_count
-
-
-def _write_accumulator_statistics(
-    *,
-    accumulator: GroupAccumulator,
-    statistics_writer: csv.DictWriter,
-    species_statistics_writer: csv.DictWriter,
-) -> None:
-    """Write group-wide and per-species statistics for one completed group."""
-
-    statistics_writer.writerow(accumulator.to_record())
-    species_statistics_writer.writerows(accumulator.to_species_records())
 
 
 def _publish_identifiers(

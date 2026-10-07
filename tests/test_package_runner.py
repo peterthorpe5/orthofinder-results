@@ -7,8 +7,8 @@ import subprocess
 from pathlib import Path
 
 
-def test_conda_runner_prefers_environment_cpp_runtime(tmp_path: Path) -> None:
-    """Conda's C++ libraries precede inherited system libraries."""
+def test_conda_runner_isolates_environment_cpp_runtime(tmp_path: Path) -> None:
+    """Conda's C++ libraries replace inherited system-library search paths."""
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -61,11 +61,48 @@ def test_conda_runner_prefers_environment_cpp_runtime(tmp_path: Path) -> None:
         "orthofinder_results",
         "env",
     ]
-    assert arguments[5] == (
-        f"LD_LIBRARY_PATH={fake_prefix}/lib:/system/lib"
-    )
-    assert arguments[6:] == [
+    assert arguments[5] == f"LD_LIBRARY_PATH={fake_prefix}/lib"
+    assert arguments[6] == "MALLOC_ARENA_MAX=2"
+    assert arguments[7:] == [
         "python3",
+        "-m",
+        "orthofinder_results",
+        "--action",
+        "inspect",
+    ]
+
+
+def test_direct_runner_bounds_allocator_arenas(tmp_path: Path) -> None:
+    """The launcher bounds allocator arenas when Conda wrapping is unnecessary."""
+
+    capture = tmp_path / "environment.txt"
+    python = tmp_path / "python"
+    python.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "printf '%s\\n' \"${MALLOC_ARENA_MAX:-}\" > \"$CAPTURE_FILE\"\n"
+        "printf '%s\\n' \"$@\" >> \"$CAPTURE_FILE\"\n",
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
+    repository = Path(__file__).resolve().parents[1]
+    completed = subprocess.run(
+        [
+            "bash",
+            str(repository / "run_orthofinder_results.sh"),
+            "--python-executable",
+            str(python),
+            "--action",
+            "inspect",
+        ],
+        check=False,
+        capture_output=True,
+        env={**os.environ, "CAPTURE_FILE": str(capture)},
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert capture.read_text(encoding="utf-8").splitlines() == [
+        "2",
         "-m",
         "orthofinder_results",
         "--action",
