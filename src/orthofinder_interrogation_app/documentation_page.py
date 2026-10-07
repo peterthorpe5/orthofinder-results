@@ -60,12 +60,14 @@ PAGE_GUIDANCE = {
         results=(
             "Results report protein- and species-level conservation, missing sequence "
             "coverage, reviewed taxonomic breadth and, in schema-5 resources, exact "
-            "species-scoped RNA-seq mapping and biological-context evidence."
+            "species-scoped RNA-seq mapping, biological-context evidence and selected-species "
+            "TSV/Excel exports."
         ),
         read_order=(
             "Define the exact suffix or explicitly enable regex, choose the group system and "
             "primary lineage, inspect candidate groups and taxonomic calls, then review "
-            "protein identifiers, RNA-seq heatmaps and species intersections."
+            "protein identifiers, RNA-seq heatmaps and species intersections. Use Selected "
+            "RNA-seq evidence tables for filtered aggregates, missingness and context rows."
         ),
         caution=(
             "Sequence conservation and RNA-seq provide candidate and biological-context "
@@ -1440,7 +1442,8 @@ METHOD_STEPS = (
         "mixing incomparable abundance scales, and explicit mapping states preserve the "
         "difference between missing evidence and measured zero.",
         "Audited aliases, unique/ambiguous/unmapped protein mappings, context-level evidence, "
-        "group summaries, heatmaps, UpSet intersections and exact downloads.",
+        "group summaries, heatmaps, UpSet intersections and exact selected-species downloads "
+        "for aggregates, member missingness and bounded context records.",
         "RNA-seq measures transcript context, not protein accumulation. It can prioritise "
         "western-blot candidates but cannot demonstrate Cereblon-dependent degradation.",
     ),

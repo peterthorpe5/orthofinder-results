@@ -19,11 +19,13 @@ from .exports import render_plotly_figure, render_table_downloads
 from .expression import (
     CONTEXT_COLUMNS,
     expression_available,
+    expression_context_records,
     expression_dimensions,
     expression_group_species,
     expression_group_summaries,
     expression_heatmap_cells,
     expression_member_evidence,
+    expression_selected_member_evidence,
 )
 from .models import ResourceIdentity
 from .taxonomy import (
@@ -786,14 +788,20 @@ def _render_expression_evidence(
             help="An empty selection means all expression-bearing species.",
         )
     )
+    effective_species = selected_species or tuple(dimensions["species"])
     log_transform = controls[3].toggle("log2(1 + value)", value=True)
-    summaries = expression_group_summaries(
+    species_rows = expression_group_species(
         resource=resource,
         group_type=group_type,
         hierarchy_node=hierarchy_node,
         group_ids=selected_groups,
+        species=effective_species,
     )
-    _render_expression_metrics(rows=summaries)
+    _render_expression_metrics(rows=species_rows, group_count=len(selected_groups))
+    st.caption(
+        f"Every selected-evidence table below is restricted to {len(effective_species):,} "
+        "chosen expression species and the selected expression unit."
+    )
     heatmap_cells = expression_heatmap_cells(
         resource=resource,
         group_type=group_type,
@@ -801,7 +809,7 @@ def _render_expression_evidence(
         group_ids=selected_groups,
         context_column=CONTEXT_COLUMNS[context_label],
         expression_unit=unit,
-        species=selected_species,
+        species=effective_species,
     )
     st.markdown("#### Cross-species expression heatmap")
     if not heatmap_cells:
@@ -819,21 +827,8 @@ def _render_expression_evidence(
             pdf_width=2100,
             pdf_height=max(1000, 52 * len(selected_groups)),
         )
-        st.dataframe(heatmap_cells, width="stretch", hide_index=True)
-        render_table_downloads(
-            records=heatmap_cells,
-            file_stem="motif_group_rna_seq_expression_heatmap_cells",
-            key="terminal_motif_expression_heatmap_cells",
-            workbook_title="Motif-group RNA-seq heatmap cells",
-        )
 
     st.markdown("#### Cross-species expression-evidence intersections")
-    species_rows = expression_group_species(
-        resource=resource,
-        group_type=group_type,
-        hierarchy_node=hierarchy_node,
-        group_ids=selected_groups,
-    )
     ranked_species = _rank_expression_species(rows=species_rows)
     upset_species = tuple(
         st.multiselect(
@@ -872,7 +867,129 @@ def _render_expression_evidence(
             key="terminal_motif_expression_intersections",
             workbook_title="RNA-seq species evidence intersections",
         )
-    st.markdown("#### Group and species evidence tables")
+
+    st.markdown("#### Selected RNA-seq evidence tables")
+    st.write(
+        "These exports follow the selected groups, expression species and expression unit. "
+        "The aggregated table contains the exact values plotted in the heatmap; the member "
+        "table retains uniquely mapped, ambiguous, unmapped and unavailable evidence states."
+    )
+    if heatmap_cells:
+        st.markdown("##### Aggregated heatmap cells")
+        st.dataframe(heatmap_cells, width="stretch", hide_index=True)
+        render_table_downloads(
+            records=heatmap_cells,
+            file_stem="selected_rna_seq_heatmap_cells",
+            key="terminal_motif_expression_heatmap_cells",
+            workbook_title="Selected RNA-seq heatmap cells",
+        )
+
+    st.markdown("##### Group-by-species mapping and expression coverage")
+    if species_rows:
+        st.dataframe(species_rows, width="stretch", hide_index=True)
+        render_table_downloads(
+            records=species_rows,
+            file_stem="selected_rna_seq_group_species_summary",
+            key="terminal_motif_expression_species_summary",
+            workbook_title="Selected RNA-seq group-by-species summary",
+        )
+    else:
+        st.info("No group members occur in the selected expression species.")
+
+    member_result = expression_selected_member_evidence(
+        resource=resource,
+        group_type=group_type,
+        hierarchy_node=hierarchy_node,
+        group_ids=selected_groups,
+        species=effective_species,
+    )
+    st.markdown("##### Protein mapping and missingness states")
+    if member_result.truncated:
+        st.warning(
+            f"The member evidence exceeded {member_result.maximum_rows:,} rows. Narrow the "
+            "group or species selection before treating the export as complete."
+        )
+    if member_result.rows:
+        preview_rows = member_result.rows[:2_000]
+        st.caption(
+            f"Showing {len(preview_rows):,} of {len(member_result.rows):,} retained member "
+            "rows on screen; both downloads contain every retained row."
+        )
+        st.dataframe(preview_rows, width="stretch", hide_index=True)
+        render_table_downloads(
+            records=member_result.rows,
+            file_stem="selected_rna_seq_member_mapping_and_missingness",
+            key="terminal_motif_expression_selected_members",
+            workbook_title="Selected RNA-seq member evidence",
+        )
+    else:
+        st.info("No protein member evidence matches the selected groups and species.")
+
+    st.markdown("##### Underlying context-level expression records")
+    st.write(
+        "Load the exact Expression Atlas rows underlying the current unit, group and species "
+        "selection. This is optional because context tables can be much larger than the "
+        "aggregated heatmap. Missing and unmapped proteins remain in the member table above; "
+        "only proteins with observed context rows occur here."
+    )
+    raw_controls = st.columns((1.4, 1.0))
+    load_context_rows = raw_controls[0].toggle(
+        "Load underlying context records",
+        value=False,
+        key="terminal_motif_load_expression_context",
+    )
+    maximum_context_rows = int(
+        raw_controls[1].selectbox(
+            "Maximum context rows",
+            options=(10_000, 25_000, 50_000, 100_000),
+            index=1,
+            disabled=not load_context_rows,
+            help="Narrow the groups or species if this protective bound is reached.",
+        )
+    )
+    if load_context_rows:
+        context_result = expression_context_records(
+            resource=resource,
+            group_type=group_type,
+            hierarchy_node=hierarchy_node,
+            group_ids=selected_groups,
+            expression_unit=unit,
+            species=effective_species,
+            maximum_rows=maximum_context_rows,
+        )
+        if context_result.truncated:
+            st.warning(
+                f"More than {context_result.maximum_rows:,} context rows matched. The table "
+                "and downloads are truncated; narrow the groups/species or increase the "
+                "protective row limit before treating the export as complete."
+            )
+        if context_result.rows:
+            preview_rows = context_result.rows[:2_000]
+            st.caption(
+                f"Showing {len(preview_rows):,} of {len(context_result.rows):,} retained "
+                "context rows on screen; both downloads contain every retained row."
+            )
+            st.dataframe(preview_rows, width="stretch", hide_index=True)
+            render_table_downloads(
+                records=context_result.rows,
+                file_stem="selected_rna_seq_context_records",
+                key="terminal_motif_expression_context_records",
+                workbook_title="Selected RNA-seq context records",
+            )
+        else:
+            st.info("No observed context records match the current selection.")
+
+    st.markdown("#### Whole-panel group summary")
+    st.caption(
+        "This packaged group-level authority covers the complete assessed RNA-seq panel. "
+        "Use the selected tables above for a species-restricted export."
+    )
+    summaries = expression_group_summaries(
+        resource=resource,
+        group_type=group_type,
+        hierarchy_node=hierarchy_node,
+        group_ids=selected_groups,
+    )
     st.dataframe(summaries, width="stretch", hide_index=True)
     render_table_downloads(
         records=summaries,
@@ -880,21 +997,15 @@ def _render_expression_evidence(
         key="terminal_motif_expression_group_summary",
         workbook_title="Motif-group RNA-seq summary",
     )
-    st.dataframe(species_rows, width="stretch", hide_index=True)
-    render_table_downloads(
-        records=species_rows,
-        file_stem="motif_group_rna_seq_species_summary",
-        key="terminal_motif_expression_species_summary",
-        workbook_title="Motif-group RNA-seq species summary",
-    )
 
 
-def _render_expression_metrics(*, rows: Sequence[Mapping[str, Any]]) -> None:
+def _render_expression_metrics(
+    *, rows: Sequence[Mapping[str, Any]], group_count: int
+) -> None:
     """Render expression mapping and observation totals for selected groups."""
 
-    group_count = len(rows)
     member_count = sum(int(row["member_count"]) for row in rows)
-    mapped = sum(int(row["unique_mapped_member_count"]) for row in rows)
+    mapped = sum(int(row["mapped_member_count"]) for row in rows)
     observed = sum(int(row["expression_observed_member_count"]) for row in rows)
     metrics = st.columns(4)
     metrics[0].metric("Groups", f"{group_count:,}")

@@ -422,9 +422,30 @@ def test_terminal_motif_route_renders_expression_heatmap_and_upset(
         markdown.value == "#### Cross-species expression heatmap"
         for markdown in test.markdown
     )
+    assert any(
+        markdown.value == "#### Selected RNA-seq evidence tables"
+        for markdown in test.markdown
+    )
+    assert any(
+        markdown.value == "##### Protein mapping and missingness states"
+        for markdown in test.markdown
+    )
     assert len(test.get("plotly_chart")) >= 2
-    assert len(test.dataframe) >= 4
-    assert len(test.get("download_button")) >= 10
+    assert len(test.dataframe) >= 5
+    assert len(test.get("download_button")) >= 12
+
+    context_toggle = next(
+        item for item in test.toggle if item.label == "Load underlying context records"
+    )
+    context_toggle.set_value(True)
+    test.run()
+    assert not test.exception
+    assert any(
+        markdown.value == "##### Underlying context-level expression records"
+        for markdown in test.markdown
+    )
+    assert len(test.dataframe) >= 6
+    assert len(test.get("download_button")) >= 14
 
     result_view = next(
         item for item in test.segmented_control if item.label == "Results workspace"

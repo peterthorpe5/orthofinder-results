@@ -272,6 +272,13 @@ page leads users from candidate definition to the heatmap, species-intersection 
 and evidence downloads; resources without RNA-seq relations receive an explicit
 allowed-missing explanation. The selected workspace remains lazy, and existing version-0.11.4
 schema-5 resources open unchanged without a cluster rerun or another resource transfer.
+Version 0.11.6 makes the expression-species choice apply consistently to the heatmap,
+UpSet choices and downloadable group/species and protein tables. A separately enabled,
+bounded context export provides the exact observed Expression Atlas rows underlying the
+selected groups, species and unit, while the protein table retains unmapped and unavailable
+states. TPM and FPKM remain separate. The browser previews at most 2,000 detailed rows and
+reports protective truncation explicitly; TSV and formatted-Excel downloads contain every
+retained row. This remains a schema-compatible viewer update.
 
 Every analytical page
 has a result-led interpretation dropdown, and each graph explanation includes common

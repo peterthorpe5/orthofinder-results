@@ -8,11 +8,13 @@ import pytest
 
 from orthofinder_interrogation_app.expression import (
     expression_available,
+    expression_context_records,
     expression_dimensions,
     expression_group_species,
     expression_group_summaries,
     expression_heatmap_cells,
     expression_member_evidence,
+    expression_selected_member_evidence,
 )
 from orthofinder_interrogation_app.resource import open_resource
 from orthofinder_interrogation_app.terminal_motif_page import (
@@ -52,6 +54,14 @@ def test_expression_queries_keep_units_contexts_and_missingness_explicit(
     assert {row["species_label"] for row in species} == {"Species_A", "Species_B"}
     beta = next(row for row in species if row["species_label"] == "Species_B")
     assert beta["expression_observed_member_count"] == 0
+    selected_species = expression_group_species(
+        resource=resource,
+        group_type="HOG",
+        hierarchy_node="N0",
+        group_ids=("N0.HOG1",),
+        species=("Species_A",),
+    )
+    assert {row["species_label"] for row in selected_species} == {"Species_A"}
     cells = expression_heatmap_cells(
         resource=resource,
         group_type="HOG",
@@ -73,6 +83,44 @@ def test_expression_queries_keep_units_contexts_and_missingness_explicit(
     not_mapped = next(row for row in members if row["member_id"] == "beta_1")
     assert not_mapped["mapping_status"] == "NOT_MAPPED"
     assert not_mapped["evidence_status"] == "NOT_MAPPED"
+
+    selected_members = expression_selected_member_evidence(
+        resource=resource,
+        group_type="HOG",
+        hierarchy_node="N0",
+        group_ids=("N0.HOG1",),
+        species=("Species_A",),
+    )
+    assert not selected_members.truncated
+    assert {row["member_id"] for row in selected_members.rows} == {
+        "alpha_1",
+        "alpha_2",
+    }
+    assert {row["mapping_status"] for row in selected_members.rows} == {
+        "MAPPED_UNIQUE"
+    }
+
+    context_rows = expression_context_records(
+        resource=resource,
+        group_type="HOG",
+        hierarchy_node="N0",
+        group_ids=("N0.HOG1",),
+        expression_unit="TPM",
+        species=("Species_A",),
+        maximum_rows=2,
+    )
+    assert context_rows.truncated
+    assert len(context_rows.rows) == 2
+    assert {row["species_label"] for row in context_rows.rows} == {"Species_A"}
+    assert {row["expression_unit"] for row in context_rows.rows} == {"TPM"}
+    assert not expression_context_records(
+        resource=resource,
+        group_type="HOG",
+        hierarchy_node="N0",
+        group_ids=("N0.HOG1",),
+        expression_unit="FPKM",
+        species=("Species_A",),
+    ).rows
 
 
 def test_expression_queries_reject_unbounded_or_unsupported_requests(
@@ -132,6 +180,31 @@ def test_expression_queries_reject_unbounded_or_unsupported_requests(
             hierarchy_node="N0",
             group_ids=("N0.HOG1\x00",),
         )
+    with pytest.raises(InputValidationError, match="never combined"):
+        expression_context_records(
+            resource=resource,
+            group_type="HOG",
+            hierarchy_node="N0",
+            group_ids=("N0.HOG1",),
+            expression_unit="",
+        )
+    with pytest.raises(InputValidationError, match="between 1 and 100,000"):
+        expression_context_records(
+            resource=resource,
+            group_type="HOG",
+            hierarchy_node="N0",
+            group_ids=("N0.HOG1",),
+            expression_unit="TPM",
+            maximum_rows=0,
+        )
+    with pytest.raises(InputValidationError, match="Species labels.*NUL"):
+        expression_selected_member_evidence(
+            resource=resource,
+            group_type="HOG",
+            hierarchy_node="N0",
+            group_ids=("N0.HOG1",),
+            species=("Species_A\x00",),
+        )
 
 
 def test_expression_queries_support_legacy_groups_and_reject_old_resources(
@@ -169,6 +242,23 @@ def test_expression_queries_support_legacy_groups_and_reject_old_resources(
         group_id="OG4",
     )
     assert legacy_members[0]["member_id"] == "delta_1"
+    legacy_selected_members = expression_selected_member_evidence(
+        resource=resource,
+        group_type="LEGACY_ORTHOGROUP",
+        hierarchy_node="",
+        group_ids=("OG4",),
+        species=("Species_D",),
+    ).rows
+    assert legacy_selected_members[0]["member_id"] == "delta_1"
+    assert legacy_selected_members[0]["mapping_status"] is None
+    assert not expression_context_records(
+        resource=resource,
+        group_type="LEGACY_ORTHOGROUP",
+        hierarchy_node="",
+        group_ids=("OG4",),
+        expression_unit="TPM",
+        species=("Species_D",),
+    ).rows
 
 
 def test_expression_queries_reject_old_resources(application_resource: Path) -> None:

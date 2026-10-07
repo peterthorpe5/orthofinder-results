@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.11.6 - 2026-10-07
+
+- Make the expression-species selector govern the heatmap, UpSet choices, group-by-species
+  summary and every new selected-evidence export instead of exporting the whole panel from
+  the bottom summary table.
+- Add a selected protein-evidence table retaining group, species, identifier mapping,
+  expression-summary and missingness states, including proteins without observed contexts.
+- Add an explicitly enabled, bounded export of the underlying Expression Atlas context rows,
+  including biological metadata, reported value, selected unit and source-file provenance.
+- Keep TPM and FPKM in separate queries and exports; no selected-evidence table pools units.
+- Provide TSV and formatted-Excel downloads for aggregated heatmap cells, group-by-species
+  coverage, member mapping/missingness and context-level records.
+- Preview at most 2,000 detailed rows in the browser, defer file construction until download
+  and report protective truncation rather than silently presenting a partial table as complete.
+- Preserve schema 5 and read compatibility with the completed version-0.11.4 resource. This
+  is a viewer-only update requiring no Slurm rerun or resource transfer.
+
 ## 0.11.5 - 2026-10-07
 
 - Promote RNA-seq exploration to a first-class sidebar page instead of requiring users to

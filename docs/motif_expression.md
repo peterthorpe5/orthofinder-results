@@ -141,6 +141,34 @@ The plot answers a coverage question: “for which species do we have observed t
 evidence for these groups?” It is not an expression-level comparison and does not make an
 absence claim for species lacking evidence.
 
+## Selected RNA-seq evidence downloads
+
+The **Expression species** control governs the heatmap query, the species available to the
+UpSet plot, the group-by-species coverage table and the detailed exports. Four complementary
+tables are available as TSV and formatted Excel:
+
+1. **Aggregated heatmap cells** contain the exact untransformed values behind the displayed
+   heatmap, including group, species, selected context label, expression unit, median, range,
+   contributing member/experiment counts and positive-context fraction.
+2. **Group-by-species coverage** reports members, mapped members, members with observed
+   expression contexts and broad-expression calls for each selected group/species pair.
+3. **Protein mapping and missingness** retains every selected group member, including exact
+   mapping status, matched identifiers, selected units, observed-context counts and evidence
+   status. This is the authoritative table for distinguishing an observed zero from an
+   ambiguous, unmapped or otherwise unavailable protein.
+4. **Underlying context records** contain the observed Expression Atlas rows used by the
+   aggregation: experiment, sample/condition, tissue, stage, genotype, treatment, value,
+   unit, positivity call and checksum-bound source provenance. Loading this table is explicit
+   because it can be much larger than the summaries.
+
+TPM and FPKM are queried and exported separately. The detailed context query has a selectable
+protective bound of 10,000–100,000 rows, and the member export is bounded at 100,000 rows.
+The app previews at most 2,000 detailed records while both downloads contain all retained
+rows. If a bound is reached, the app labels the export as truncated and instructs the user to
+narrow the group/species selection or increase the context bound; it never implies that a
+partial table is complete. Proteins without observed contexts occur in the mapping/missingness
+table but cannot occur in the observed context table.
+
 ## Published schema-5 outputs
 
 | Output | Unit | Purpose |
@@ -186,8 +214,9 @@ download control is activated.
 If the four required expression relations are absent, the dedicated explorer reports an
 allowed-missing resource rather than showing an empty result. Motif, taxonomy, phylogeny and
 dispersion pages remain usable, and unavailable expression evidence is never converted to
-zero. Version 0.11.5 is read-compatible with a completed version-0.11.4 schema-5 resource;
-the navigation update does not require rebuilding or copying that resource again.
+zero. Versions 0.11.5 and 0.11.6 are read-compatible with a completed version-0.11.4
+schema-5 resource; these viewer updates do not require rebuilding or copying that resource
+again.
 
 ## Safe resource replacement
 
