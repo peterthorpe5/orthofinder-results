@@ -1,0 +1,14 @@
+species_label	scientific_name	role	source
+Arabidopsis_thaliana	Arabidopsis thaliana	target_plant	E3 project species_manifest_results_feb26.tsv
+Brachypodium_distachyon	Brachypodium distachyon	target_plant	E3 project species_manifest_results_feb26.tsv
+Glycine_max	Glycine max	target_plant	E3 project species_manifest_results_feb26.tsv
+Hordeum_vulgare	Hordeum vulgare	target_plant	E3 project species_manifest_results_feb26.tsv
+Medicago_truncatula	Medicago truncatula	target_plant	E3 project species_manifest_results_feb26.tsv
+Oryza_sativa	Oryza sativa	target_plant	E3 project species_manifest_results_feb26.tsv
+Populus_trichocarpa	Populus trichocarpa	target_plant	E3 project species_manifest_results_feb26.tsv
+Solanum_lycopersicum	Solanum lycopersicum	target_plant	E3 project species_manifest_results_feb26.tsv
+Solanum_tuberosum	Solanum tuberosum	target_plant	E3 project species_manifest_results_feb26.tsv
+Sorghum_bicolor	Sorghum bicolor	target_plant	E3 project species_manifest_results_feb26.tsv
+Triticum_aestivum	Triticum aestivum	target_plant	E3 project species_manifest_results_feb26.tsv
+Zea_mays	Zea mays	target_plant	E3 project species_manifest_results_feb26.tsv
+Homo_sapiens	Homo sapiens	reference_species	E3 project species_manifest_results_feb26.tsv

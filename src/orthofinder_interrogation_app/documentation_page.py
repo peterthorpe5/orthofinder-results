@@ -1140,8 +1140,9 @@ GLOSSARY_ENTRIES = (
         "Sequence and expression",
         "A public source of normalised expression matrices and experiment metadata used "
         "as the checksum-bound RNA-seq authority in schema-5 resources.",
-        "The app displays only included, verified partitions whose exact species labels "
-        "occur in the OrthoFinder run.",
+        "The production resource displays verified evidence for the reviewed 12-plant "
+        "panel plus Homo sapiens; other OrthoFinder species remain available to non-expression "
+        "analyses and are not assessed rather than treated as zero.",
         "RNA-seq expression context; TPM; FPKM",
     ),
     GlossaryEntry(
@@ -1178,6 +1179,15 @@ GLOSSARY_ENTRIES = (
         "Regex mode is off by default and must be enabled explicitly; review member-level "
         "matched fragments before interpreting a group.",
         "C-terminal motif; exact suffix",
+    ),
+    GlossaryEntry(
+        "RNA-seq assessment scope",
+        "Sequence and expression",
+        "The reviewed species panel for which Expression Atlas evidence was integrated: "
+        "12 focal plant species plus Homo sapiens in the production E3 resource.",
+        "This scope changes only the RNA-seq denominator. It does not remove species from "
+        "orthology, taxonomy, phylogeny or motif searches; out-of-scope means not assessed.",
+        "Expression Atlas; unavailable; species-scoped exact mapping",
     ),
     GlossaryEntry(
         "RNA-seq expression context",
@@ -1416,8 +1426,12 @@ METHOD_STEPS = (
         "Species-scoped RNA-seq evidence",
         (
             "The builder verifies the corrected Expression Atlas resource manifest and every "
-            "included Parquet checksum, derives exact member aliases from SequenceIDs.txt and "
-            "optional reviewed aliases, and maps identifiers only within an exact species. "
+            "selected Parquet checksum. The production scope contains the 12 focal plants plus "
+            "Homo sapiens; all other OrthoFinder species remain available to non-expression "
+            "analyses and are explicitly not assessed for RNA-seq. A fresh disk-backed worker "
+            "derives exact member aliases from SequenceIDs.txt and optional reviewed aliases, "
+            "maps them to a deduplicated gene catalogue only within an exact species, and then "
+            "expands the resolved genes into biological contexts. "
             "TPM is selected when available for each species and experiment, otherwise FPKM; "
             "the units are never pooled. Expression contexts are joined to tissue, stage and "
             "condition metadata and summarised for proteins and every group authority."

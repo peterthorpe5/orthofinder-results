@@ -113,13 +113,19 @@ echo "Node-local work directory: $JOB_WORK_DIR"
 
 SOURCE_KB=$(du -sk -- "$RESULTS_SOURCE" | awk '{print $1}')
 AVAILABLE_KB=$(df -Pk "$TMPDIR" | awk 'NR == 2 {print $4}')
-RESERVE_KB=$((12 * 1024 * 1024))
+SCRATCH_RESERVE_GIB=${ORTHOFINDER_SCRATCH_RESERVE_GIB:-200}
+[[ "$SCRATCH_RESERVE_GIB" =~ ^[0-9]+$ ]] && \
+    [[ "$SCRATCH_RESERVE_GIB" -ge 1 ]] || {
+    echo "ERROR: ORTHOFINDER_SCRATCH_RESERVE_GIB must be a positive integer." >&2
+    exit 2
+}
+RESERVE_KB=$((SCRATCH_RESERVE_GIB * 1024 * 1024))
 REQUIRED_KB=$((SOURCE_KB + RESERVE_KB))
 [[ "$AVAILABLE_KB" -ge "$REQUIRED_KB" ]] || {
     echo "ERROR: scheduler TMPDIR has ${AVAILABLE_KB} KiB free; source staging plus the required analysis reserve needs at least ${REQUIRED_KB} KiB." >&2
     exit 2
 }
-echo "TMPDIR capacity check: source=${SOURCE_KB} KiB, free=${AVAILABLE_KB} KiB, analysis reserve=${RESERVE_KB} KiB"
+echo "TMPDIR capacity check: source=${SOURCE_KB} KiB, free=${AVAILABLE_KB} KiB, analysis reserve=${RESERVE_KB} KiB (${SCRATCH_RESERVE_GIB} GiB)"
 
 mkdir -p -- "$OUTPUT_PARENT"
 PUBLISH_LOCK_CANDIDATE="$OUTPUT_PARENT/.${OUTPUT_NAME}.publish.lock"
@@ -164,17 +170,68 @@ fi
 
 EXPRESSION_ARGUMENTS=(--include-protein-sequences)
 if [[ "$EXPRESSION_MANIFEST_SOURCE" != "-" ]]; then
+    BUNDLED_EXPRESSION_SCOPE="$PACKAGE_ROOT/src/orthofinder_interrogation_app/data/expression_species_scope.tsv"
+    EXPRESSION_SCOPE_SOURCE=${ORTHOFINDER_EXPRESSION_SPECIES_SCOPE:-$BUNDLED_EXPRESSION_SCOPE}
+    [[ -s "$EXPRESSION_SCOPE_SOURCE" ]] || {
+        echo "ERROR: expression species scope is unavailable: $EXPRESSION_SCOPE_SOURCE" >&2
+        exit 2
+    }
     EXPRESSION_MANIFEST_STAGE="$JOB_WORK_DIR/expression_resources.tsv"
-    cp "$EXPRESSION_MANIFEST_SOURCE" "$EXPRESSION_MANIFEST_STAGE"
-    EXPRESSION_MEMORY_MB=${ORTHOFINDER_EXPRESSION_MEMORY_MB:-8192}
+    awk -F '\t' -v OFS='\t' '
+        NR == FNR {
+            if (FNR == 1) {
+                for (column = 1; column <= NF; column++) {
+                    if ($column == "species_label") scope_column = column
+                }
+                if (!scope_column) exit 41
+                next
+            }
+            if ($scope_column != "") allowed[$scope_column] = 1
+            next
+        }
+        FNR == 1 {
+            for (column = 1; column <= NF; column++) {
+                if ($column == "species_column") species_column = column
+            }
+            if (!species_column) exit 42
+            print
+            next
+        }
+        $species_column in allowed {
+            print
+            selected++
+        }
+        END {
+            if (!selected) exit 43
+        }
+    ' "$EXPRESSION_SCOPE_SOURCE" "$EXPRESSION_MANIFEST_SOURCE" \
+        > "$EXPRESSION_MANIFEST_STAGE" || {
+        echo "ERROR: could not restrict the expression manifest to the reviewed focal-species scope." >&2
+        exit 2
+    }
+    EXPRESSION_RESOURCE_COUNT=$(( $(wc -l < "$EXPRESSION_MANIFEST_STAGE") - 1 ))
+    echo "RNA-seq scope: 12 target plant species plus Homo_sapiens; manifest resources=${EXPRESSION_RESOURCE_COUNT}"
+    EXPRESSION_MEMORY_MB=${ORTHOFINDER_EXPRESSION_MEMORY_MB:-49152}
     [[ "$EXPRESSION_MEMORY_MB" =~ ^[0-9]+$ ]] && \
         [[ "$EXPRESSION_MEMORY_MB" -ge 256 ]] || {
         echo "ERROR: ORTHOFINDER_EXPRESSION_MEMORY_MB must be at least 256 MiB." >&2
         exit 2
     }
+    EXPRESSION_THREADS=${ORTHOFINDER_EXPRESSION_THREADS:-${SLURM_CPUS_PER_TASK:-4}}
+    [[ "$EXPRESSION_THREADS" =~ ^[0-9]+$ ]] && \
+        [[ "$EXPRESSION_THREADS" -ge 1 ]] || {
+        echo "ERROR: ORTHOFINDER_EXPRESSION_THREADS must be a positive integer." >&2
+        exit 2
+    }
+    if [[ -n "${SLURM_CPUS_PER_TASK:-}" ]] && \
+        [[ "$EXPRESSION_THREADS" -gt "$SLURM_CPUS_PER_TASK" ]]; then
+        echo "ERROR: expression threads exceed the allocated Slurm CPUs." >&2
+        exit 2
+    fi
+    echo "RNA-seq DuckDB controls: threads=${EXPRESSION_THREADS}, memory_limit_mib=${EXPRESSION_MEMORY_MB}"
     EXPRESSION_ARGUMENTS+=(
         --expression-manifest "$EXPRESSION_MANIFEST_STAGE"
-        --expression-threads "${SLURM_CPUS_PER_TASK:-4}"
+        --expression-threads "$EXPRESSION_THREADS"
         --expression-memory-mb "$EXPRESSION_MEMORY_MB"
     )
 fi

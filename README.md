@@ -259,6 +259,13 @@ Version 0.11.2 bounds complete-proteome batches and final DuckDB materialisation
 validated fragments through bounded buffers. This prevents allocator memory retained across
 the hierarchy levels from accumulating to the scheduler limit. Worker and parent peak RSS
 values are written to the build log; schema 5 and all analytical values remain unchanged.
+Version 0.11.4 restricts the optional RNA-seq layer to the 12 focal plant species in the
+project authority plus *Homo sapiens*. Orthology, taxonomy and motif searches still cover
+all 60 proteomes. Expression integration now runs in a fresh process against a file-backed
+DuckDB, joins identifiers to a deduplicated Atlas gene catalogue before expanding biological
+contexts and writes the largest context relation directly to typed Parquet. Species outside
+the expression panel are labelled not assessed; they are never interpreted as zero
+expression or failed mappings.
 
 Every analytical page
 has a result-led interpretation dropdown, and each graph explanation includes common
@@ -321,15 +328,16 @@ corrected Expression Atlas authority during construction with:
 orthofinder-results \
   --action dispersion-benchmark \
   --results-dir /path/to/Results_Feb26 \
-  --run-id results_feb26_motif_expression_v0_11_1 \
+  --run-id results_feb26_motif_expression_v0_11_4 \
   --output-dir /path/to/new_completed_resource \
   --expression-manifest /path/to/e3_workflow_expression_resources.tsv \
   --include-protein-sequences
 ```
 
-The builder verifies each manifest checksum once before mutation, records the verified
-digests in provenance, and then scans only expression partitions whose exact species
-occur in the OrthoFinder run. The local viewer does not rehash the full expression
+The production Slurm wrapper filters the manifest to the packaged 12-plant-plus-human
+scope. The builder verifies each selected checksum once before mutation, records the
+verified digests in provenance and scans only those selected partitions whose exact
+species occur in the OrthoFinder run. The local viewer does not rehash the full expression
 authority on widget changes. Resource identity and low-cardinality selectors are cached,
 result views are evaluated lazily, and TSV, Excel and PDF payloads are generated only
 when requested.

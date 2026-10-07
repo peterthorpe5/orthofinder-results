@@ -613,7 +613,9 @@ def _render_selected_group(
                 "gene matched at the best identifier tier. AMBIGUOUS and NOT_MAPPED are "
                 "unavailable evidence, not negative expression. NO_EXPRESSION_RECORDS "
                 "means a gene mapped but no compatible Atlas context was published. TPM "
-                "and FPKM are never combined within an experiment."
+                "and FPKM are never combined within an experiment. The production RNA-seq "
+                "scope is the reviewed 12-plant panel plus Homo sapiens. Proteins from other "
+                "OrthoFinder species are not assessed here; they are not negative mappings."
             )
         expression_rows = expression_member_evidence(
             resource=resource,
@@ -644,6 +646,8 @@ def _render_expression_evidence(
         st.write(
             "This section asks whether proteins in the motif-qualified groups have "
             "species-scoped Expression Atlas evidence, and in which tissues or contexts. "
+            "The production evidence panel contains 12 focal plant species plus Homo sapiens; "
+            "the remaining OrthoFinder species stay available in every non-expression view. "
             "It does not test whether the motif causes expression or whether Cereblon "
             "regulates transcript abundance. Protein accumulation is post-transcriptional, "
             "so RNA-seq is supporting biological context rather than a substitute for "

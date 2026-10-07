@@ -61,10 +61,12 @@ manifests/e3_workflow_expression_resources.tsv
 ```
 
 The manifest inventories included expression and metadata Parquet partitions, exact species
-labels and SHA-256 digests. Every included file is verified before resource construction.
-Only partitions whose exact case-insensitive species labels occur in the OrthoFinder run
-are scanned during analytical integration; all included partition digests remain in the
-input inventory.
+labels and SHA-256 digests. The production wrapper filters it to the 12 focal plants in the
+project species authority plus *Homo sapiens*, and every selected file is verified before
+resource construction. The other 47 OrthoFinder species remain fully available for orthology,
+taxonomy, phylogeny and motif analysis but are explicitly `NOT_ASSESSED` for RNA-seq. They are
+not counted as zero expression, absent genes or mapping failures. The filtered authority and
+selected partition digests remain in the input inventory.
 
 ## Identifier mapping
 
@@ -145,19 +147,25 @@ absence claim for species lacking evidence.
 | `expression_import_audit.tsv.gz` | resource build | Source counts, thresholds and policies |
 
 Small mapping, summary and audit tables are retained as compressed TSV and embedded as typed
-DuckDB relations. The high-volume expression-context and protein-sequence authorities are
-written through typed Parquet construction sources, materialised once in DuckDB and then
-removed from the completed resource. This prevents duplicate multi-gigabyte copies without
-changing any app query. Visible app tables have exact TSV and formatted-Excel downloads;
+DuckDB relations. Expression integration runs in a fresh process against a file-backed work
+database. Protein aliases first join a deduplicated species/gene catalogue, so one alias is
+not multiplied by every tissue and condition before its identity is resolved. The largest
+member-context relation is streamed directly to typed Parquet rather than materialised in
+RAM. High-volume expression-context and protein-sequence authorities are then materialised
+once in the final DuckDB and their construction Parquet files are removed after checkpoint.
+This prevents duplicate multi-gigabyte completed outputs without changing any app query.
+Visible app tables have exact TSV and formatted-Excel downloads;
 every quantitative Plotly figure has a deferred PDF download.
 
-Final DuckDB publication uses the same explicit thread and memory controls as expression
-integration. If a relation cannot be materialised within that buffer-manager limit, DuckDB
-may spill temporary construction data to a dedicated directory beneath scheduler-local
-work storage. The directory must start empty and must be empty after the final checkpoint;
-publication otherwise fails closed. Progress logs identify each relation, source size and
-materialised row count. These controls bound database construction without changing stored
-values, identifiers or analytical denominators.
+Final DuckDB publication uses explicit thread and memory controls. If a relation cannot be
+materialised within that buffer-manager limit, DuckDB may spill temporary construction data
+to a dedicated directory beneath scheduler-local work storage. The expression worker logs
+each substage's elapsed time, process RSS, work-database size and spill size and returns a
+small validated metadata record to the parent. A native crash therefore cannot corrupt the
+formal resource and can be localised to one named substage. Construction directories are
+removed only after a successful checkpoint. These controls bound database construction
+without changing stored values or identifiers. Expression group denominators include only
+the reviewed species that were actually assessed.
 
 ## Performance and integrity boundary
 

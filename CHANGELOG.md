@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## 0.11.4 - 2026-10-07
+
+- Restrict production RNA-seq integration to the reviewed E3 project scope of 12 target
+  plant species plus *Homo sapiens*. All 60 proteomes remain available to orthology,
+  taxonomy and motif-conservation analyses; only RNA-seq evidence is scoped.
+- Replace the memory-amplifying alias-to-every-context join with an exact, species-scoped
+  join against a deduplicated Atlas gene catalogue before any expression contexts are
+  attached.
+- Run expression integration in a fresh worker process using a file-backed DuckDB and
+  node-local spill directory. The 100-million-row-style context relation is written
+  directly to typed Parquet instead of first occupying an in-memory temporary table.
+- Log every RNA-seq substage with elapsed time, worker peak RSS, work-database size and
+  spill size; validate worker completion metadata before the main pipeline can continue.
+- Keep out-of-scope species distinct from failed identifier mappings and calculate group
+  expression coverage only over the explicitly assessed RNA-seq species.
+- Raise the Slurm guide to 192 GiB while retaining a conservative 48 GiB internal DuckDB
+  limit and eight expression threads. The extra allocation is a safety margin rather than
+  a substitute for bounded execution.
+- Preserve schema 5 and all motif, dispersion and app query contracts; a fresh resource
+  build is required because the RNA-seq scope and construction algorithm changed.
+
 ## 0.11.3 - 2026-10-07
 
 - Fix the independently confirmed 96 GiB Slurm failure during hierarchical-membership

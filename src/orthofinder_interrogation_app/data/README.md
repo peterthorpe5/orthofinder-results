@@ -60,3 +60,25 @@ audit. To use another species or panel, copy the TSV, retain its exact headings,
 replace the records with reviewed protein identifiers and pass it through
 `--benchmark-proteins`. The package never transfers Arabidopsis classifications to
 another dataset by identifier spelling or taxonomic inference.
+
+## RNA-seq species scope
+
+`expression_species_scope.tsv` is the production RNA-seq inclusion authority. It contains
+the 12 focal plant species recorded in the E3 project
+`species_manifest_results_feb26.tsv` plus *Homo sapiens* as the requested comparison:
+
+- *Arabidopsis thaliana*, *Brachypodium distachyon*, *Glycine max*, *Hordeum vulgare*,
+  *Medicago truncatula* and *Oryza sativa*;
+- *Populus trichocarpa*, *Solanum lycopersicum*, *Solanum tuberosum*, *Sorghum bicolor*,
+  *Triticum aestivum* and *Zea mays*; and
+- *Homo sapiens*.
+
+This file controls only the optional Expression Atlas integration. All species in the
+completed OrthoFinder run remain available to group membership, taxonomy, phylogeny,
+sequence-motif and conservation analyses. A protein from a species outside this panel is
+`NOT_ASSESSED` for RNA-seq; it is not a zero-expression observation and is not counted as an
+identifier-mapping failure.
+
+The Slurm wrapper uses this packaged authority by default and records the filtered manifest
+in the completed resource provenance. An explicitly reviewed replacement can be supplied
+through `ORTHOFINDER_EXPRESSION_SPECIES_SCOPE`; it must retain the `species_label` column.

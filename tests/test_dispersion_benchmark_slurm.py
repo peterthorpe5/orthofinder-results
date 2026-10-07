@@ -20,6 +20,12 @@ def _write_fake_package(*, root: Path) -> Path:
         "marker_id\nAT1G00001\n",
         encoding="utf-8",
     )
+    (data / "expression_species_scope.tsv").write_text(
+        "species_label\tscientific_name\trole\tsource\n"
+        "Arabidopsis_thaliana\tArabidopsis thaliana\ttarget_plant\ttest\n"
+        "Homo_sapiens\tHomo sapiens\treference_species\ttest\n",
+        encoding="utf-8",
+    )
     runner = root / "run_orthofinder_results.sh"
     table_names = (
         "e3_cluster_results",
@@ -41,22 +47,26 @@ def _write_fake_package(*, root: Path) -> Path:
     runner.write_text(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
-        "printf '%s\\n' \"$@\" > \"$CAPTURE_FILE\"\n"
+        'printf \'%s\\n\' "$@" > "$CAPTURE_FILE"\n'
         "output=''\n"
+        "expression_manifest=''\n"
         "while (($#)); do\n"
-        "  if [[ \"$1\" == '--output-dir' ]]; then output=$2; shift 2; else shift; fi\n"
+        "  if [[ \"$1\" == '--output-dir' ]]; then output=$2; shift 2; "
+        "elif [[ \"$1\" == '--expression-manifest' ]]; then "
+        "expression_manifest=$2; shift 2; else shift; fi\n"
         "done\n"
-        "[[ -n \"$output\" ]]\n"
-        "mkdir -p \"$output/tables\" \"$output/duckdb\" \"$output/qc\"\n"
+        '[[ -n "$output" ]]\n'
+        'mkdir -p "$output/tables" "$output/duckdb" "$output/qc"\n'
+        'if [[ -n "$expression_manifest" ]]; then '
+        'cp "$expression_manifest" "$output/expression_manifest_used.tsv"; fi\n'
         + "".join(
-            f"printf 'header\\nrow\\n' | gzip -c > "
-            f'"$output/tables/{name}.tsv.gz"\n'
+            f"printf 'header\\nrow\\n' | gzip -c > \"$output/tables/{name}.tsv.gz\"\n"
             for name in table_names
         )
         + "printf 'duckdb\\n' > \"$output/duckdb/orthofinder_results.duckdb\"\n"
         "printf 'check_name\\tstatus\\nall\\tPASS\\n' > "
         '"$output/qc/validation_checks.tsv"\n'
-        "printf '{\"status\": \"complete\"}\\n' > \"$output/run_manifest.json\"\n",
+        'printf \'{"status": "complete"}\\n\' > "$output/run_manifest.json"\n',
         encoding="utf-8",
     )
     runner.chmod(0o755)
@@ -77,7 +87,11 @@ def _arguments(*, tmp_path: Path) -> tuple[list[str], Path, Path]:
     capture = tmp_path / "captured_arguments.txt"
     expression_manifest = tmp_path / "expression_resources.tsv"
     expression_manifest.write_text(
-        "resource_id\tresource_type\tspecies_column\tdataset\tpath\tsha256\tinclude\n",
+        "resource_id\tresource_type\tspecies_column\tdataset\tpath\tsha256\tinclude\n"
+        "expression:a\tatlas_expression_long\tArabidopsis_thaliana\ttest\t"
+        "/expression.parquet\tsha\ttrue\n"
+        "expression:excluded\tatlas_expression_long\tMus_musculus\ttest\t"
+        "/mouse.parquet\tsha\ttrue\n",
         encoding="utf-8",
     )
     return (
@@ -114,6 +128,7 @@ def test_benchmark_wrapper_stages_inputs_and_keeps_formal_output_persistent(
         "USER": "test_user",
         "SLURM_JOB_ID": "13579",
         "SLURM_CPUS_PER_TASK": "9",
+        "ORTHOFINDER_SCRATCH_RESERVE_GIB": "1",
         "CAPTURE_FILE": str(capture),
     }
     script = Path(__file__).resolve().parents[1] / "slurm/dispersion_benchmark.sbatch"
@@ -140,6 +155,11 @@ def test_benchmark_wrapper_stages_inputs_and_keeps_formal_output_persistent(
     assert captured[captured.index("--action") + 1] == "dispersion-benchmark"
     assert "--include-protein-sequences" in captured
     assert captured[captured.index("--expression-threads") + 1] == "9"
+    filtered_manifest = Path(captured[captured.index("--expression-manifest") + 1])
+    assert filtered_manifest.name == "expression_resources.tsv"
+    used_manifest = (output / "expression_manifest_used.tsv").read_text(encoding="utf-8")
+    assert "Arabidopsis_thaliana" in used_manifest
+    assert "Mus_musculus" not in used_manifest
     assert captured[captured.index("--output-dir") + 1] == str(output)
     assert not tuple(node_tmp.iterdir())
     assert not tuple(output.parent.glob(".*.publish.lock"))
@@ -153,6 +173,7 @@ def test_benchmark_wrapper_is_mac_testable_and_protects_managed_options() -> Non
     assert "date --iso-8601" not in source
     assert "mv -T" not in source
     assert "${TMPDIR:-/tmp}" not in source
+    assert "ORTHOFINDER_SCRATCH_RESERVE_GIB:-200" in source
     assert "date -u '+%Y-%m-%dT%H:%M:%SZ'" in source
     assert '--output-dir "$PERSISTENT_OUTPUT"' in source
     assert "--benchmark-proteins" in source

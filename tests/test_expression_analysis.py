@@ -5,23 +5,34 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+import orthofinder_results.expression_analysis as expression_analysis
 from orthofinder_results.errors import InputValidationError, PublicationError
 from orthofinder_results.expression_analysis import (
+    ALIAS_FIELDS,
     CONTEXT_FIELDS,
     _create_source_views,
+    _directory_size_bytes,
+    _expression_substage,
     _header_aliases,
     _iter_aliases,
+    _load_worker_request,
     _parquet_query,
+    _publish_expression_worker,
+    _read_expression_worker_metadata,
     _remove_empty_directory,
+    _run_expression_worker,
     _validate_atlas_rows,
     _write_query,
     _write_query_parquet,
+    main,
+    peak_rss_mib,
     publish_expression_evidence,
     read_expression_manifest,
 )
@@ -468,8 +479,7 @@ def test_expression_source_views_and_rows_validate_before_mapping(tmp_path: Path
         connection = duckdb.connect()
         try:
             connection.execute(
-                "CREATE TABLE atlas_expression(expression_unit VARCHAR, "
-                "expression_value DOUBLE)"
+                "CREATE TABLE atlas_expression(expression_unit VARCHAR, expression_value DOUBLE)"
             )
             connection.execute("INSERT INTO atlas_expression VALUES (?, ?)", [unit, value])
             connection.execute(
@@ -478,9 +488,7 @@ def test_expression_source_views_and_rows_validate_before_mapping(tmp_path: Path
             )
             connection.execute("INSERT INTO atlas_metadata VALUES ('Species_A','E-1','leaf')")
             if duplicate_metadata:
-                connection.execute(
-                    "INSERT INTO atlas_metadata VALUES ('Species_A','E-1','leaf')"
-                )
+                connection.execute("INSERT INTO atlas_metadata VALUES ('Species_A','E-1','leaf')")
             with pytest.raises(InputValidationError, match=message):
                 _validate_atlas_rows(connection=connection)
         finally:
@@ -678,26 +686,23 @@ def test_expression_publication_keeps_mapping_states_and_preferred_units(
         threads=1,
         memory_limit_mb=256,
     )
-    assert publication.counts["expression_member_count"] == 3
+    assert publication.counts["expression_member_count"] == 2
     mappings = tuple(read_tsv(path=tables / "expression_member_mapping.tsv.gz"))
     statuses = {row["member_id"]: row["mapping_status"] for row in mappings}
     assert statuses == {
-        "protein_three": "NOT_MAPPED",
         "protein_two": "AMBIGUOUS",
         "sp|P11111|PROTA_SPECIES": "MAPPED_UNIQUE",
     }
     context_connection = duckdb.connect()
     try:
         context_rows = context_connection.execute(
-            "SELECT expression_unit, expression_context "
-            "FROM read_parquet(?)",
+            "SELECT expression_unit, expression_context FROM read_parquet(?)",
             [str(tables / "expression_context.parquet")],
         ).fetchall()
     finally:
         context_connection.close()
     contexts = tuple(
-        {"expression_unit": row[0], "expression_context": row[1]}
-        for row in context_rows
+        {"expression_unit": row[0], "expression_context": row[1]} for row in context_rows
     )
     assert {row["expression_unit"] for row in contexts} == {"TPM"}
     assert {row["expression_context"] for row in contexts} == {"leaf", "root"}
@@ -708,6 +713,280 @@ def test_expression_publication_keeps_mapping_states_and_preferred_units(
     groups = tuple(read_tsv(path=tables / "expression_group_summary.tsv.gz"))
     assert groups[0]["unique_mapped_member_count"] == "1"
     assert groups[0]["ambiguous_member_count"] == "1"
+
+
+def test_file_backed_expression_worker_publishes_validated_outputs(tmp_path: Path) -> None:
+    """The direct worker uses its local database and publishes every expected relation."""
+
+    source = tmp_path / "source"
+    source.mkdir()
+    authority = read_expression_manifest(path=_write_manifest(root=source))
+    tables = _write_orthofinder_tables(root=tmp_path)
+    selected_species = {"Species_A"}
+    write_tsv(
+        path=tables / "expression_identifier_aliases.tsv.gz",
+        fieldnames=ALIAS_FIELDS,
+        records=_iter_aliases(
+            sequence_path=tables / "sequences.tsv.gz",
+            run_id="run",
+            additional_aliases_path=None,
+            allowed_species=selected_species,
+        ),
+    )
+    worker = tmp_path / "worker"
+    worker.mkdir()
+    expression_paths = authority.paths(
+        resource_type="atlas_expression_long",
+        species=selected_species,
+    )
+    record = _publish_expression_worker(
+        request={
+            "tables_dir": str(tables),
+            "work_dir": str(worker),
+            "run_id": "run",
+            "expression_paths": [str(path) for path in expression_paths],
+            "all_expression_paths": [str(path) for path in expression_paths],
+            "metadata_paths": [
+                str(path)
+                for path in authority.paths(
+                    resource_type="atlas_sample_metadata_wide",
+                    species=selected_species,
+                )
+            ],
+            "minimum_expression_value": 0.5,
+            "broad_positive_fraction": 0.5,
+            "threads": 1,
+            "memory_limit_mb": 256,
+        }
+    )
+    assert record["status"] == "complete"
+    assert record["counts"]["expression_context_count"] == 2
+    assert record["database_bytes"] > 0
+    assert record["peak_rss_mib"] > 0
+    assert (worker / "expression_work.duckdb").is_file()
+    assert (tables / "expression_context.parquet").is_file()
+    assert _directory_size_bytes(path=worker) >= record["database_bytes"]
+
+
+def test_expression_worker_failures_remain_diagnostic(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Signals, structured failures and malformed requests fail with useful errors."""
+
+    monkeypatch.setattr(
+        expression_analysis.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=-11),
+    )
+    with pytest.raises(PublicationError, match="signal 11"):
+        _run_expression_worker(
+            request_path=tmp_path / "request.json",
+            metadata_path=tmp_path / "absent.json",
+        )
+
+    metadata = tmp_path / "failure.json"
+    metadata.write_text(
+        json.dumps(
+            {
+                "metadata_version": 1,
+                "status": "failed",
+                "error_type": "InputValidationError",
+                "message": "controlled invalid input",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        expression_analysis.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=2),
+    )
+    with pytest.raises(InputValidationError, match="controlled invalid input"):
+        _run_expression_worker(
+            request_path=tmp_path / "request.json",
+            metadata_path=metadata,
+        )
+
+    malformed = tmp_path / "malformed.json"
+    malformed.write_text("{", encoding="utf-8")
+    with pytest.raises(PublicationError, match="Invalid RNA-seq worker metadata"):
+        _read_expression_worker_metadata(path=malformed)
+    with pytest.raises(InputValidationError, match="request is unavailable"):
+        _load_worker_request(path=tmp_path / "missing.json")
+
+    worker_metadata = tmp_path / "main_failure.json"
+    assert (
+        main(
+            [
+                "--worker-request",
+                str(tmp_path / "missing_request.json"),
+                "--worker-metadata",
+                str(worker_metadata),
+            ]
+        )
+        == 2
+    )
+    assert json.loads(worker_metadata.read_text(encoding="utf-8"))["status"] == "failed"
+    assert peak_rss_mib() > 0
+
+
+def test_expression_worker_completion_metadata_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Every completion field is validated before worker outputs are trusted."""
+
+    expected_counts = {
+        "expression_member_count": 2,
+        "expression_unique_mapping_count": 1,
+        "expression_ambiguous_mapping_count": 1,
+        "expression_not_mapped_count": 0,
+        "expression_context_count": 2,
+        "expression_group_count": 1,
+    }
+    valid = {
+        "metadata_version": 1,
+        "status": "complete",
+        "counts": expected_counts,
+        "worker_pid": 123,
+        "peak_rss_mib": 10.5,
+        "database_bytes": 100,
+        "spill_bytes": 0,
+    }
+    monkeypatch.setattr(
+        expression_analysis.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0),
+    )
+    metadata = tmp_path / "completion.json"
+    cases = (
+        ({**valid, "status": "unknown"}, "valid completion metadata"),
+        ({**valid, "counts": {}}, "invalid counts"),
+        (
+            {**valid, "counts": {**expected_counts, "expression_member_count": -1}},
+            "non-negative integers",
+        ),
+        ({**valid, "worker_pid": -1}, "invalid worker_pid"),
+        ({**valid, "peak_rss_mib": True}, "invalid peak_rss_mib"),
+    )
+    for record, message in cases:
+        metadata.write_text(json.dumps(record), encoding="utf-8")
+        with pytest.raises(PublicationError, match=message):
+            _run_expression_worker(
+                request_path=tmp_path / "request.json",
+                metadata_path=metadata,
+            )
+
+    generic_failure = {**valid, "status": "failed", "message": "controlled failure"}
+    metadata.write_text(json.dumps(generic_failure), encoding="utf-8")
+    with pytest.raises(PublicationError, match="controlled failure"):
+        _run_expression_worker(
+            request_path=tmp_path / "request.json",
+            metadata_path=metadata,
+        )
+
+    metadata.unlink()
+    monkeypatch.setattr(
+        expression_analysis.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=3),
+    )
+    with pytest.raises(PublicationError, match="exited with status 3"):
+        _run_expression_worker(
+            request_path=tmp_path / "request.json",
+            metadata_path=metadata,
+        )
+
+
+def test_expression_worker_request_and_logging_edge_cases(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Malformed worker envelopes and failed substages remain explicit and auditable."""
+
+    non_object = tmp_path / "non_object.json"
+    non_object.write_text("[]", encoding="utf-8")
+    with pytest.raises(PublicationError, match="not an object"):
+        _read_expression_worker_metadata(path=non_object)
+    unsupported_metadata = tmp_path / "unsupported_metadata.json"
+    unsupported_metadata.write_text('{"metadata_version": 99}', encoding="utf-8")
+    with pytest.raises(PublicationError, match="version is unsupported"):
+        _read_expression_worker_metadata(path=unsupported_metadata)
+
+    invalid_request = tmp_path / "invalid_request.json"
+    invalid_request.write_text("{", encoding="utf-8")
+    with pytest.raises(InputValidationError, match="request is invalid"):
+        _load_worker_request(path=invalid_request)
+    request_list = tmp_path / "request_list.json"
+    request_list.write_text("[]", encoding="utf-8")
+    with pytest.raises(InputValidationError, match="JSON object"):
+        _load_worker_request(path=request_list)
+    unsupported_request = tmp_path / "unsupported_request.json"
+    unsupported_request.write_text('{"metadata_version": 99}', encoding="utf-8")
+    with pytest.raises(InputValidationError, match="version is unsupported"):
+        _load_worker_request(path=unsupported_request)
+    incomplete_request = tmp_path / "incomplete_request.json"
+    incomplete_request.write_text('{"metadata_version": 1}', encoding="utf-8")
+    with pytest.raises(InputValidationError, match="lacks fields"):
+        _load_worker_request(path=incomplete_request)
+
+    missing_directories = {
+        "tables_dir": str(tmp_path / "missing_tables"),
+        "work_dir": str(tmp_path / "missing_work"),
+        "run_id": "run",
+        "expression_paths": [],
+        "all_expression_paths": [],
+        "metadata_paths": [],
+        "minimum_expression_value": 0.5,
+        "broad_positive_fraction": 0.5,
+        "threads": 1,
+        "memory_limit_mb": 256,
+    }
+    with pytest.raises(InputValidationError, match="input directories are unavailable"):
+        _publish_expression_worker(request=missing_directories)
+
+    spill = tmp_path / "spill"
+    spill.mkdir()
+    with pytest.raises(RuntimeError, match="substage test"):
+        with _expression_substage(
+            name="deliberate_failure",
+            database_path=tmp_path / "absent.duckdb",
+            spill_path=spill,
+        ):
+            raise RuntimeError("substage test")
+    assert _directory_size_bytes(path=tmp_path / "absent_directory") == 0
+
+    complete_request = {"metadata_version": 1, **missing_directories}
+    success_request = tmp_path / "success_request.json"
+    success_request.write_text(json.dumps(complete_request), encoding="utf-8")
+    success_metadata = tmp_path / "success_metadata.json"
+    expected_record = {
+        "metadata_version": 1,
+        "status": "complete",
+        "counts": {},
+        "worker_pid": 123,
+        "peak_rss_mib": 1.0,
+        "database_bytes": 0,
+        "spill_bytes": 0,
+    }
+    monkeypatch.setattr(
+        expression_analysis,
+        "_publish_expression_worker",
+        lambda *, request: expected_record,
+    )
+    assert (
+        main(
+            [
+                "--worker-request",
+                str(success_request),
+                "--worker-metadata",
+                str(success_metadata),
+            ]
+        )
+        == 0
+    )
+    assert json.loads(success_metadata.read_text(encoding="utf-8")) == expected_record
 
 
 def test_pipeline_publishes_schema5_expression_and_sequence_resource(
@@ -779,15 +1058,11 @@ def test_pipeline_publishes_schema5_expression_and_sequence_resource(
     assert not (output / "tables/expression_context.tsv.gz").exists()
     assert not (output / "tables/expression_context.parquet").exists()
     stages = [row["stage"] for row in read_tsv(path=output / "logs/stage_metrics.tsv")]
-    assert stages.index("rna_seq_expression_evidence") < stages.index(
-        "protein_sequence_sidecar"
-    )
+    assert stages.index("rna_seq_expression_evidence") < stages.index("protein_sequence_sidecar")
     assert stages.index("protein_sequence_sidecar") < stages.index("duckdb_publication")
     published = json.loads((output / "run_manifest.json").read_text(encoding="utf-8"))
     assert published["rna_seq_expression"]["unit_selection_policy"].startswith("TPM")
-    connection = duckdb.connect(
-        str(output / "duckdb/orthofinder_results.duckdb"), read_only=True
-    )
+    connection = duckdb.connect(str(output / "duckdb/orthofinder_results.duckdb"), read_only=True)
     try:
         relations = {
             row[0]

@@ -104,19 +104,21 @@ CONDA_ENV=orthofinder_results
 RESULTS_DIR=/home/pthorpe001/data/2026_E3_protac/SSD_back_up_July_2026/Erin_Butterfield_data/Main_folder/OrthoFinder/Results_Feb26
 EXPRESSION_ROOT=/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/analysis/expression_atlas_rebuild_v0_5_1_20260804
 EXPRESSION_MANIFEST=${EXPRESSION_ROOT}/manifests/e3_workflow_expression_resources.tsv
-RUN_ID=results_feb26_motif_expression_v0_11_3
+RUN_ID=results_feb26_motif_expression_v0_11_4
 OUTPUT_ROOT=/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/orthofinder_results_resources
 LOG_DIR=${OUTPUT_ROOT}/slurm_logs/${RUN_ID}
 
 test -s "${EXPRESSION_MANIFEST}"
 mkdir -p "${LOG_DIR}"
-export ORTHOFINDER_EXPRESSION_MEMORY_MB=32768
+export ORTHOFINDER_EXPRESSION_MEMORY_MB=49152
+export ORTHOFINDER_EXPRESSION_THREADS=8
+export ORTHOFINDER_SCRATCH_RESERVE_GIB=200
 
 sbatch \
   --job-name=of_dispersion \
   --partition=barton \
   --cpus-per-task=13 \
-  --mem=96G \
+  --mem=192G \
   --time=2-00:00:00 \
   --output="${LOG_DIR}/orthofinder_results_%j.out" \
   --error="${LOG_DIR}/orthofinder_results_%j.err" \
@@ -135,13 +137,18 @@ sbatch \
 ```
 
 The cluster scheduler must provide an absolute writable `TMPDIR`. The wrapper stages
-the completed OrthoFinder source, packaged biological authorities and expression
-manifest there. Manifest paths continue to identify checksum-bound Atlas Parquet
-partitions on GPFS; DuckDB uses bounded memory and spills to node-local work space.
-Version 0.11.3 parses each legacy/HOG source in a fresh worker process and logs both worker
-and parent peak RSS before moving to the next hierarchy level. The pipeline embeds the
-complete protein-sequence relation in DuckDB, publishes the formal result through its
-checksum-verified atomic publication layer and refuses an existing output.
+the completed OrthoFinder source and packaged biological authorities there, filters the
+checksum-bound expression manifest to the reviewed 12 focal plants plus *Homo sapiens*,
+and checks that source staging plus 200 GiB of analysis reserve fits before starting.
+Manifest paths continue to identify checksum-bound Atlas Parquet partitions on GPFS.
+Version 0.11.3 parses each legacy/HOG source in a fresh worker process. Version 0.11.4
+also runs expression integration in its own process using a file-backed DuckDB and a
+dedicated spill directory. It joins aliases to a deduplicated Atlas gene catalogue before
+expanding biological contexts and logs each substage's elapsed time, worker RSS, database
+size and spill size. The 192 GiB job request is a safety envelope; DuckDB itself is capped
+at 48 GiB and eight threads. The pipeline embeds the complete protein-sequence relation in
+DuckDB, publishes the formal result through its checksum-verified atomic publication layer
+and refuses an existing output.
 
 ## Machine-readable outputs
 
@@ -172,7 +179,7 @@ which prevents the database from expanding merely to support calibration.
 
 ## Application interpretation and gene downloads
 
-Viewer version 0.11.3 remains read-compatible with the existing schema-4 benchmark
+Viewer version 0.11.4 remains read-compatible with the existing schema-4 benchmark
 resource and opens the new schema-5 motif/expression resource. RNA-seq views require
 the schema-5 rebuild described above; the calibrated-dispersion page remains divided
 into three result-led tabs:
