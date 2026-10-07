@@ -45,7 +45,10 @@ from orthofinder_interrogation_app.queries import (
 )
 from orthofinder_interrogation_app.resource import open_resource
 from orthofinder_interrogation_app.taxonomy_page import render_taxonomy_search
-from orthofinder_interrogation_app.terminal_motif_page import render_terminal_motif_page
+from orthofinder_interrogation_app.terminal_motif_page import (
+    render_rna_seq_explorer_page,
+    render_terminal_motif_page,
+)
 from orthofinder_results import __version__
 from orthofinder_results.errors import OrthoFinderResultsError
 from orthofinder_results.io_utils import configure_logging
@@ -63,6 +66,7 @@ _PAGES = (
     "Taxonomic search",
     "Selection coverage tree",
     "C-terminal motif conservation",
+    "RNA-seq explorer",
     "Offline report",
     "Methods",
     "Glossary",
@@ -80,6 +84,7 @@ _PAGE_LABELS = {
     "Taxonomic search": "Taxonomic search",
     "Selection coverage tree": "Selection coverage tree",
     "C-terminal motif conservation": "Protein motif conservation",
+    "RNA-seq explorer": "RNA-seq explorer",
     "Offline report": "Download report",
     "Methods": "Methods & provenance",
     "Glossary": "Glossary",
@@ -283,6 +288,12 @@ def main() -> None:
             )
         elif page_name == "C-terminal motif conservation":
             render_terminal_motif_page(
+                resource=resource,
+                sidecar_path_text=os.environ.get(TERMINAL_MOTIF_ENVIRONMENT_VARIABLE, ""),
+                taxonomy_path_text=taxonomy_path_text,
+            )
+        elif page_name == "RNA-seq explorer":
+            render_rna_seq_explorer_page(
                 resource=resource,
                 sidecar_path_text=os.environ.get(TERMINAL_MOTIF_ENVIRONMENT_VARIABLE, ""),
                 taxonomy_path_text=taxonomy_path_text,

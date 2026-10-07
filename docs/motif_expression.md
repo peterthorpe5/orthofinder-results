@@ -106,6 +106,13 @@ Only the first is measured zero. The others remain missing or unavailable.
 
 ## Heatmap
 
+The application exposes RNA-seq in two equivalent ways: choose **RNA-seq explorer** directly
+in the sidebar, or select the **RNA-seq explorer** workspace at the top of **Protein motif
+conservation**. Both routes use the same sequence, orthology and taxonomy filters. The direct
+page is intended for users whose question begins with expression; the workspace switcher is
+useful when moving between candidate, taxonomic, protein and expression evidence for the same
+search. Only the selected workspace runs its larger queries and figures.
+
 The heatmap rows are selected motif-qualified groups. Columns are exact species plus the
 selected biological context: Expression Atlas sample label, organism part/tissue,
 developmental stage or condition. Each populated cell is the median expression value across
@@ -175,6 +182,12 @@ read-only, and does not repeatedly checksum the external Atlas partitions. Resul
 lazy: selecting the RNA-seq view triggers its bounded queries, while other motif views do not.
 Low-cardinality selectors are cached. TSV, Excel and PDF files are generated only after their
 download control is activated.
+
+If the four required expression relations are absent, the dedicated explorer reports an
+allowed-missing resource rather than showing an empty result. Motif, taxonomy, phylogeny and
+dispersion pages remain usable, and unavailable expression evidence is never converted to
+zero. Version 0.11.5 is read-compatible with a completed version-0.11.4 schema-5 resource;
+the navigation update does not require rebuilding or copying that resource again.
 
 ## Safe resource replacement
 

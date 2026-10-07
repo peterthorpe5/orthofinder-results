@@ -177,6 +177,16 @@ def test_terminal_motif_route_explains_missing_sequence_sidecar(
     assert any("One-time setup" == item.value for item in test.subheader)
     assert any("orthofinder-terminal-motif-build" in item.value for item in test.code)
 
+    test.sidebar.radio[0].set_value("RNA-seq explorer")
+    test.run()
+    assert not test.exception
+    assert any(header.value == "RNA-seq explorer" for header in test.header)
+    assert any(
+        "does not contain the complete RNA-seq evidence relations" in item.value
+        for item in test.warning
+    )
+    assert any("allowed missing resource" in item.value for item in test.markdown)
+
 
 def test_terminal_motif_route_rejects_invalid_and_empty_searches(
     application_resource: Path,
@@ -327,11 +337,13 @@ def test_terminal_motif_route_renders_complete_results_and_downloads(
         metric.label == "Qualifying groups" and metric.value == "1"
         for metric in test.metric
     )
-    result_view = next(item for item in test.radio if item.label == "Result view")
+    result_view = next(
+        item for item in test.segmented_control if item.label == "Results workspace"
+    )
     assert len(test.dataframe) >= 1
     assert len(test.get("download_button")) >= 3
 
-    result_view.set_value("Taxonomic matrix")
+    result_view.set_value("Taxonomic conservation")
     test.run()
     assert not test.exception
     assert any(
@@ -341,8 +353,10 @@ def test_terminal_motif_route_renders_complete_results_and_downloads(
     assert test.get("plotly_chart")
     assert len(test.get("download_button")) >= 1
 
-    result_view = next(item for item in test.radio if item.label == "Result view")
-    result_view.set_value("Inspect one group")
+    result_view = next(
+        item for item in test.segmented_control if item.label == "Results workspace"
+    )
+    result_view.set_value("Protein & group explorer")
     test.run()
     assert not test.exception
     assert any(subheader.value == "Inspect one group" for subheader in test.subheader)
@@ -394,9 +408,11 @@ def test_terminal_motif_route_renders_expression_heatmap_and_upset(
     test.sidebar.radio[0].set_value("C-terminal motif conservation")
     test.run()
     assert not test.exception
-    result_view = next(item for item in test.radio if item.label == "Result view")
-    assert "RNA-seq expression" in result_view.options
-    result_view.set_value("RNA-seq expression")
+    result_view = next(
+        item for item in test.segmented_control if item.label == "Results workspace"
+    )
+    assert "RNA-seq explorer" in result_view.options
+    result_view.set_value("RNA-seq explorer")
     test.run()
     assert not test.exception
     assert any(
@@ -410,8 +426,10 @@ def test_terminal_motif_route_renders_expression_heatmap_and_upset(
     assert len(test.dataframe) >= 4
     assert len(test.get("download_button")) >= 10
 
-    result_view = next(item for item in test.radio if item.label == "Result view")
-    result_view.set_value("Inspect one group")
+    result_view = next(
+        item for item in test.segmented_control if item.label == "Results workspace"
+    )
+    result_view.set_value("Protein & group explorer")
     test.run()
     assert not test.exception
     assert any(
@@ -419,6 +437,21 @@ def test_terminal_motif_route_renders_expression_heatmap_and_upset(
         for markdown in test.markdown
     )
     assert len(test.dataframe) >= 3
+
+    test.sidebar.radio[0].set_value("RNA-seq explorer")
+    test.run()
+    assert not test.exception
+    assert any(header.value == "RNA-seq explorer" for header in test.header)
+    assert any("12-plant panel plus Homo sapiens" in item.value for item in test.success)
+    assert not test.segmented_control
+    assert any(
+        subheader.value == "Explore RNA-seq evidence" for subheader in test.subheader
+    )
+    assert any(
+        markdown.value == "#### Cross-species expression heatmap"
+        for markdown in test.markdown
+    )
+    assert len(test.get("plotly_chart")) >= 2
 
 
 def test_dispersion_benchmark_route_renders_complete_inference(

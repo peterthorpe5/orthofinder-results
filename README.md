@@ -266,6 +266,12 @@ DuckDB, joins identifiers to a deduplicated Atlas gene catalogue before expandin
 contexts and writes the largest context relation directly to typed Parquet. Species outside
 the expression panel are labelled not assessed; they are never interpreted as zero
 expression or failed mappings.
+Version 0.11.5 makes those results discoverable through a dedicated **RNA-seq explorer**
+sidebar page and a prominent workspace selector above the shared motif filters. The direct
+page leads users from candidate definition to the heatmap, species-intersection UpSet plot
+and evidence downloads; resources without RNA-seq relations receive an explicit
+allowed-missing explanation. The selected workspace remains lazy, and existing version-0.11.4
+schema-5 resources open unchanged without a cluster rerun or another resource transfer.
 
 Every analytical page
 has a result-led interpretation dropdown, and each graph explanation includes common
@@ -418,7 +424,10 @@ The application provides:
   state separate from dataset coverage, and exports a reconciled audit package;
 - a **Protein motif conservation** page supporting exact C-terminal suffixes and
   opt-in regex searches, HOG or original-orthogroup authorities, reviewed taxonomic
-  denominators, complete protein/FASTA audits and schema-5 RNA-seq heatmap and UpSet views;
+  denominators, complete protein/FASTA audits and a prominent lazy results-workspace switcher;
+- a first-class **RNA-seq explorer** page for motif-qualified groups, with biological-context
+  heatmaps, exact cross-species UpSet intersections, member-level evidence and the reviewed
+  12-plant-plus-human assessment scope stated beside the results;
 - and a three-part expandable guide beside every graph describing what it shows,
   how to interpret it and its most important limitation.
 

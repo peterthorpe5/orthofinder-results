@@ -88,6 +88,10 @@ _MEMBER_HELP = {
     "Matched sequence": "First matching sequence fragment, or the exact suffix.",
     "Sequence": "Complete protein sequence; hidden in the on-screen table by default.",
 }
+_CANDIDATE_VIEW = "Motif candidates"
+_TAXONOMY_VIEW = "Taxonomic conservation"
+_GROUP_VIEW = "Protein & group explorer"
+_EXPRESSION_VIEW = "RNA-seq explorer"
 
 
 def render_terminal_motif_page(
@@ -95,17 +99,41 @@ def render_terminal_motif_page(
     resource: ResourceIdentity,
     sidecar_path_text: str,
     taxonomy_path_text: str = "",
+    expression_only: bool = False,
 ) -> None:
-    """Render flexible exact and regex sequence-conservation discovery."""
+    """Render flexible sequence conservation or its RNA-seq explorer.
 
-    st.header("Protein motif conservation")
+    Args:
+        resource: Validated immutable OrthoFinder resource.
+        sidecar_path_text: Optional external sequence-sidecar path for older resources.
+        taxonomy_path_text: Optional reviewed taxonomy authority path.
+        expression_only: Open directly into the RNA-seq results workspace.
+    """
+
+    st.header("RNA-seq explorer" if expression_only else "Protein motif conservation")
     render_page_guidance(key="terminal_motif")
-    st.write(
-        "Find OrthoFinder groups whose proteins share an exact C-terminal motif or, "
-        "when explicitly enabled, a regular-expression pattern. Qualification is "
-        "calculated over a transparent primary species set; other lineages remain "
-        "available as independent comparison evidence."
-    )
+    if expression_only:
+        st.write(
+            "Explore transcript evidence for motif-qualified OrthoFinder groups across the "
+            "reviewed RNA-seq species panel. First define the sequence, group and taxonomic "
+            "filters; the heatmap, UpSet intersections and downloadable evidence tables then "
+            "update for that exact candidate set."
+        )
+        if not expression_available(resource=resource):
+            _render_expression_setup_state()
+            return
+        st.success(
+            "RNA-seq evidence is available for the reviewed 12-plant panel plus Homo sapiens. "
+            "All other OrthoFinder species remain available to the motif and taxonomic filters "
+            "but are not assessed for expression."
+        )
+    else:
+        st.write(
+            "Find OrthoFinder groups whose proteins share an exact C-terminal motif or, "
+            "when explicitly enabled, a regular-expression pattern. Qualification is "
+            "calculated over a transparent primary species set; other lineages remain "
+            "available as independent comparison evidence."
+        )
     sidecar = Path(sidecar_path_text) if sidecar_path_text.strip() else None
     if not sequence_authority_available(resource=resource, sidecar_path=sidecar):
         _render_setup_state()
@@ -122,6 +150,12 @@ def render_terminal_motif_page(
         st.error(str(error))
         return
 
+    selected_view = (
+        _EXPRESSION_VIEW
+        if expression_only
+        else _render_result_workspace_selector(resource=resource)
+    )
+    st.subheader("Define candidate groups" if expression_only else "Search and filters")
     try:
         search = _render_search_controls()
         group_type, hierarchy_node = _render_group_controls(resource=resource)
@@ -175,30 +209,22 @@ def render_terminal_motif_page(
         required_taxon_ids=taxonomy["required_taxon_ids"],
         excluded_taxon_ids=taxonomy["excluded_taxon_ids"],
     )
-    views = ["Candidate groups", "Taxonomic matrix", "Inspect one group"]
-    if expression_available(resource=resource):
-        views.append("RNA-seq expression")
-    selected_view = st.radio(
-        "Result view",
-        options=views,
-        horizontal=True,
-        label_visibility="collapsed",
-        key="terminal_motif_result_view",
-    )
-    if selected_view == "Candidate groups":
+    if expression_only:
+        st.subheader("Explore RNA-seq evidence")
+    if selected_view == _CANDIDATE_VIEW:
         _render_candidate_overview(
             rows=rows,
             search=search,
             threshold=filters["threshold"],
             group_type=group_type,
         )
-    elif selected_view == "Taxonomic matrix":
+    elif selected_view == _TAXONOMY_VIEW:
         _render_taxonomic_matrix(
             rows=rows,
             species=taxonomy["analysis_species"],
             search=search,
         )
-    elif selected_view == "Inspect one group":
+    elif selected_view == _GROUP_VIEW:
         _render_selected_group(
             rows=rows,
             resource=resource,
@@ -216,6 +242,76 @@ def render_terminal_motif_page(
             group_type=group_type,
             hierarchy_node=hierarchy_node,
         )
+
+
+def render_rna_seq_explorer_page(
+    *,
+    resource: ResourceIdentity,
+    sidecar_path_text: str,
+    taxonomy_path_text: str = "",
+) -> None:
+    """Render a direct, discoverable entry point to RNA-seq evidence.
+
+    Args:
+        resource: Validated immutable OrthoFinder resource.
+        sidecar_path_text: Optional external sequence-sidecar path for older resources.
+        taxonomy_path_text: Optional reviewed taxonomy authority path.
+    """
+
+    render_terminal_motif_page(
+        resource=resource,
+        sidecar_path_text=sidecar_path_text,
+        taxonomy_path_text=taxonomy_path_text,
+        expression_only=True,
+    )
+
+
+def _render_result_workspace_selector(*, resource: ResourceIdentity) -> str:
+    """Render a prominent lazy workspace switch and return the selected view."""
+
+    st.subheader("Choose a results workspace")
+    st.caption(
+        "Only the selected workspace is queried and rendered. Changing workspace does not "
+        "alter the sequence, orthology or taxonomic filters below."
+    )
+    views = [_CANDIDATE_VIEW, _TAXONOMY_VIEW, _GROUP_VIEW]
+    if expression_available(resource=resource):
+        views.append(_EXPRESSION_VIEW)
+        st.success(
+            "RNA-seq explorer available — 12 focal plant species plus Homo sapiens."
+        )
+    else:
+        st.info(
+            "RNA-seq explorer is unavailable in this resource. Motif discovery remains fully "
+            "available; open the dedicated RNA-seq page for the rebuild requirements."
+        )
+    selected = st.segmented_control(
+        "Results workspace",
+        options=views,
+        default=_CANDIDATE_VIEW,
+        selection_mode="single",
+        key="terminal_motif_result_workspace",
+        help=(
+            "Choose the result type before adjusting the shared filters. The RNA-seq workspace "
+            "contains the heatmap, UpSet intersections and complete evidence tables."
+        ),
+    )
+    return str(selected or _CANDIDATE_VIEW)
+
+
+def _render_expression_setup_state() -> None:
+    """Explain why an older resource cannot expose the RNA-seq explorer."""
+
+    st.warning(
+        "The opened resource does not contain the complete RNA-seq evidence relations, so the "
+        "explorer cannot run from this dataset."
+    )
+    st.markdown(
+        "A schema-5 resource must contain `expression_context`, "
+        "`expression_member_mapping`, `expression_member_summary` and "
+        "`expression_group_summary`. This is an allowed missing resource: every non-expression "
+        "page continues to work, and no missing expression value is interpreted as zero."
+    )
 
 
 def _render_setup_state() -> None:

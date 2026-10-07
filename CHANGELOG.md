@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.11.5 - 2026-10-07
+
+- Promote RNA-seq exploration to a first-class sidebar page instead of requiring users to
+  discover a small result-view control inside the protein-motif page.
+- Add a prominent results-workspace selector above the shared motif, orthology and taxonomic
+  filters, with clearly named motif-candidate, taxonomic-conservation, protein/group and
+  RNA-seq workspaces.
+- State the reviewed expression scope (12 focal plant species plus *Homo sapiens*) beside
+  the navigation while retaining all other OrthoFinder species for motif and taxonomy work.
+- Give older or expression-free resources an explicit allowed-missing explanation, including
+  the four schema-5 relations required by the explorer; missing evidence is never presented
+  as measured zero.
+- Preserve lazy execution: only the selected workspace issues its larger queries or renders
+  its figures. This is a viewer-only update that reads the existing version-0.11.4 schema-5
+  resource without a cluster rebuild or resource transfer.
+
 ## 0.11.4 - 2026-10-07
 
 - Restrict production RNA-seq integration to the reviewed E3 project scope of 12 target
