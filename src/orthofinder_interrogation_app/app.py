@@ -60,6 +60,7 @@ _PAGES = (
     "Find a protein",
     "Find groups",
     "Cluster explorer",
+    "Protein research workbench",
     "Compare clusters",
     "Dispersion benchmarks",
     "All distance results",
@@ -78,6 +79,7 @@ _PAGE_LABELS = {
     "Find a protein": "Find a gene / protein",
     "Find groups": "Find groups",
     "Cluster explorer": "Explore one cluster",
+    "Protein research workbench": "Protein research workbench",
     "Compare clusters": "Compare clusters",
     "Dispersion benchmarks": "Calibrated dispersion",
     "All distance results": "All distance results",
@@ -233,6 +235,11 @@ def main() -> None:
             ),
         )
     st.sidebar.caption(f"Viewer version {__version__}")
+    if page_name == "Protein research workbench" and not resource_text.strip():
+        from orthofinder_interrogation_app.research.ui import render_research_workbench
+
+        render_research_workbench()
+        return
     if not resource_text.strip():
         st.info("Provide a completed resource path in the sidebar to begin.")
         return
@@ -264,6 +271,10 @@ def main() -> None:
                 service=service,
                 cache_dir=cache_dir,
             )
+        elif page_name == "Protein research workbench":
+            from orthofinder_interrogation_app.workbench_page import render_workbench_page
+
+            render_workbench_page(service=service)
         elif page_name == "Compare clusters":
             render_cluster_comparison(
                 resource=resource,

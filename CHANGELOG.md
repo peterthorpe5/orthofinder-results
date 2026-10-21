@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+## 0.12.0 - 2026-10-21
+
+- Add a first-class Protein research workbench and direct handoff from existing
+  cluster and protein-centred views, retaining exact OrthoFinder composite group keys.
+- Select exact local groups or the largest groups at one hierarchy level, with
+  species and protein filters, full membership checks, and TSV/Excel context exports.
+- Transfer available embedded or sidecar protein sequences into checksummed family
+  inputs without rebuilding or modifying the published OrthoFinder resource.
+- Port the generic research engine from the supplied E3 v0.19.1 update: indexed
+  DeepClust discovery/retrieval, audited exact ID mapping, stricter DIAMOND DeepClust
+  subclusters, MAFFT statistics, FastTree phylogeny and bundled protein viewers.
+- Include the official SEQID/CLUSTERID mapping-column correction, exact centroid
+  list exports, audited selected-cluster imports and streaming large-file CLI.
+- Add a portable wrapper for the separately cloned upstream extractor, including
+  its single-dash path options, trailing output separator and per-cluster ID preservation.
+- Carry source species and audited subcluster labels through downstream trees, and
+  expose maximal supported multi-tip subclades as Auspice streamtree partitions.
+- Include optional local/remote ESMFold and local InterProScan/eggNOG or explicit
+  EMBL-EBI annotation jobs, with model/annotation sequence hashes checked before overlays.
+- Add standalone and Slurm workers, setup diagnostics, scientific smoke tests,
+  provenance records, offline viewer assets and workflow documentation.
+- Keep data schema 5 and existing viewer, report, expression and motif workflows.
+
 ## 0.11.6 - 2026-10-07
 
 - Make the expression-species selector govern the heatmap, UpSet choices, group-by-species

@@ -1,0 +1,2 @@
+# Preserve checksummed third-party bundles and notices byte for byte.
+src/orthofinder_interrogation_app/data/research_viewers/* -text -diff -whitespace
