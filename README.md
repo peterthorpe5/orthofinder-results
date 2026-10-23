@@ -18,6 +18,47 @@ rebuilding the package.
 This project is independent of, and is not endorsed by, the OrthoFinder
 authors. Cite OrthoFinder itself when using its results.
 
+## Protein research workbench (v0.13.0)
+
+The workbench now opens with **Start here**, page-by-page aims, field help,
+readable job labels and buttons that carry a completed family into its next
+analysis. See the [user guide](docs/workbench_user_guide.md).
+
+For **de.NBI / Sabrina**, use the [Mac launcher and setup guide](docs/denbi.md).
+The app and worker run on the server beside its installed DeepClust database;
+your Mac displays the interface through SSH. E3's working database settings can
+be reused with a separate OrthoFinder queue.
+
+Open **Protein research workbench** in the sidebar, or use **Open this group in
+protein research workbench** from the cluster explorer or a protein search.
+Select complete OrthoFinder groups, map their member IDs to DeepClust, import
+selected cluster FASTAs, recluster with stricter mutual coverage, and inspect
+alignments, trees, predicted structures and functional annotations.
+
+The workbench includes the generic engine and exchange corrections supplied in
+the E3 app v0.19.1, adapted to this independent package. Its commands and default
+workspace are separate from the E3 app. **Existing resources need no rebuild**;
+research jobs use an external writable workspace. Original HOG hierarchy and
+species labels remain attached to local input selections.
+
+Start with [the workbench guide](docs/protein_workbench.md) and
+[selected DeepClust exports](docs/deepclust_exchange.md). Access to a database
+holder is still needed for global extraction; cloning the extraction tool supplies
+code, rather than database access. Imported exports and ordinary FASTAs can be
+analysed on a laptop without the global database.
+
+```bash
+python -m pip install --editable '.[app]'
+orthofinder-interrogation-app --resource-dir /absolute/path/to/completed_resource \
+    --research-config /absolute/path/research.toml
+```
+
+Run the worker with the same profile in another terminal:
+
+```bash
+orthofinder-protein-workbench --config /absolute/path/research.toml worker
+```
+
 The canonical repository is
 [`peterthorpe5/orthofinder-results`](https://github.com/peterthorpe5/orthofinder-results).
 The generic package was extracted from its original development location in

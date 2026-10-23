@@ -169,6 +169,15 @@ def _render_group_analysis(
 ) -> None:
     """Load and render a selected cluster with optional protein focus."""
 
+    from .workbench_page import open_group_workbench
+
+    st.button(
+        "Open this group in protein research workbench",
+        key=f"research_group_{_state_token(key=key)}",
+        on_click=open_group_workbench,
+        kwargs={"key": key},
+        help="Retain the exact group and prepare all its members for further protein analysis.",
+    )
     controls = st.columns((2, 2, 2, 3))
     max_members = int(
         controls[0].select_slider(

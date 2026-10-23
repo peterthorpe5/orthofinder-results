@@ -26,6 +26,7 @@ EXPECTED_TAXA_ENVIRONMENT_VARIABLE = "ORTHOFINDER_RESULTS_EXPECTED_TAXA"
 FOCUS_ENVIRONMENT_VARIABLE = "ORTHOFINDER_RESULTS_FOCUS_PROTEINS"
 CACHE_ENVIRONMENT_VARIABLE = "ORTHOFINDER_RESULTS_CACHE"
 TERMINAL_MOTIF_ENVIRONMENT_VARIABLE = "ORTHOFINDER_RESULTS_TERMINAL_MOTIF_PARQUET"
+RESEARCH_ENVIRONMENT_VARIABLE = "ORTHOFINDER_RESEARCH_CONFIG"
 DEFAULT_PORT = 8501
 MAX_AUTOMATIC_PORT_ATTEMPTS = 100
 
@@ -94,6 +95,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Do not ask Streamlit to open a browser automatically.",
     )
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="Validate the resource, sidecars and research profile without binding a port "
+        "or starting Streamlit. Suitable for server launch preflight checks.",
+    )
+    parser.add_argument(
+        "--research-config",
+        type=Path,
+        help="Protein research TOML profile shared by the app and its worker.",
+    )
     return parser
 
 
@@ -120,14 +132,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     try:
         resource = open_resource(path=arguments.resource_dir)
-        selected_port = select_server_port(
-            address=arguments.server_address,
-            requested_port=arguments.server_port,
+        selected_port = (
+            arguments.server_port or DEFAULT_PORT
+            if arguments.validate_only
+            else select_server_port(
+                address=arguments.server_address,
+                requested_port=arguments.server_port,
+            )
         )
     except OrthoFinderResultsError as error:
         _LOGGER.error("Cannot launch application: %s", error)
         return 2
     environment = os.environ.copy()
+    if arguments.research_config is not None:
+        from .research.common import ResearchError, load_config
+
+        try:
+            profile = arguments.research_config.expanduser().resolve()
+            research = load_config(path=profile)
+            if research.workspace.is_relative_to(resource.resource_path):
+                raise ResearchError("Research workspace must be outside the completed resource")
+        except ResearchError as error:
+            _LOGGER.error("Protein research profile is invalid: %s", error)
+            return 2
+        environment[RESEARCH_ENVIRONMENT_VARIABLE] = str(profile)
     environment[RESOURCE_ENVIRONMENT_VARIABLE] = str(resource.resource_path)
     cache_dir = (
         arguments.cache_dir.expanduser().resolve()
@@ -169,6 +197,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             _LOGGER.error("Terminal-motif sequence resource is invalid: %s", error)
             return 2
         environment[TERMINAL_MOTIF_ENVIRONMENT_VARIABLE] = str(motif_path)
+    if arguments.validate_only:
+        print(f"VALID\t{resource.run_id}\t{resource.resource_path}")
+        return 0
     app_path = Path(__file__).with_name("app.py").resolve()
     command = [
         sys.executable,
