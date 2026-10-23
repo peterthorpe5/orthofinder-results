@@ -12,6 +12,34 @@ from orthofinder_interrogation_app import launcher
 from orthofinder_results.errors import InputValidationError
 
 
+def test_server_validation_does_not_bind_or_launch(
+    application_resource, tmp_path, monkeypatch, capsys
+):
+    """Preflight works alongside a running app and still validates optional inputs."""
+    port = Mock(side_effect=AssertionError("Validation must not bind a port"))
+    process = Mock(side_effect=AssertionError("Validation must not start a process"))
+    monkeypatch.setattr(launcher, "select_server_port", port)
+    monkeypatch.setattr(launcher.subprocess, "run", process)
+    profile = tmp_path / "research.toml"
+    profile.write_text(f'workspace="{tmp_path / "jobs"}"\n', encoding="utf-8")
+    arguments = [
+        "--resource-dir",
+        str(application_resource),
+        "--research-config",
+        str(profile),
+        "--server-port",
+        "8506",
+        "--validate-only",
+    ]
+    assert launcher.main(argv=arguments) == 0
+    assert capsys.readouterr().out.startswith("VALID\t")
+    assert launcher.main(argv=arguments + ["--taxonomy-map", str(tmp_path / "absent")]) == 2
+    profile.write_text("unknown_setting=3\n", encoding="utf-8")
+    assert launcher.main(argv=arguments) == 2
+    port.assert_not_called()
+    process.assert_not_called()
+
+
 def test_launcher_validates_resource_and_builds_streamlit_command(
     application_resource: Path,
     taxonomy_mapping_file: Path,
@@ -62,12 +90,8 @@ def test_launcher_validates_resource_and_builds_streamlit_command(
     assert environment[launcher.TAXONOMY_ENVIRONMENT_VARIABLE] == str(
         taxonomy_mapping_file.resolve()
     )
-    assert environment[launcher.EXPECTED_TAXA_ENVIRONMENT_VARIABLE] == str(
-        expected_file.resolve()
-    )
-    assert environment[launcher.FOCUS_ENVIRONMENT_VARIABLE] == str(
-        focus_file.resolve()
-    )
+    assert environment[launcher.EXPECTED_TAXA_ENVIRONMENT_VARIABLE] == str(expected_file.resolve())
+    assert environment[launcher.FOCUS_ENVIRONMENT_VARIABLE] == str(focus_file.resolve())
     assert log_file.is_file()
 
 

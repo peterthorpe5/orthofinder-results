@@ -96,6 +96,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="Validate the resource, sidecars and research profile without binding a port "
+        "or starting Streamlit. Suitable for server launch preflight checks.",
+    )
+    parser.add_argument(
         "--research-config",
         type=Path,
         help="Protein research TOML profile shared by the app and its worker.",
@@ -126,9 +132,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     try:
         resource = open_resource(path=arguments.resource_dir)
-        selected_port = select_server_port(
-            address=arguments.server_address,
-            requested_port=arguments.server_port,
+        selected_port = (
+            arguments.server_port or DEFAULT_PORT
+            if arguments.validate_only
+            else select_server_port(
+                address=arguments.server_address,
+                requested_port=arguments.server_port,
+            )
         )
     except OrthoFinderResultsError as error:
         _LOGGER.error("Cannot launch application: %s", error)
@@ -187,6 +197,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             _LOGGER.error("Terminal-motif sequence resource is invalid: %s", error)
             return 2
         environment[TERMINAL_MOTIF_ENVIRONMENT_VARIABLE] = str(motif_path)
+    if arguments.validate_only:
+        print(f"VALID\t{resource.run_id}\t{resource.resource_path}")
+        return 0
     app_path = Path(__file__).with_name("app.py").resolve()
     command = [
         sys.executable,

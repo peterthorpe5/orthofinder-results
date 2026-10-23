@@ -256,6 +256,22 @@ def test_integrated_ui_and_current_group_handoff(
     shortcut.click().run()
     assert not test.exception
     assert test.sidebar.radio[0].value == "Protein research workbench"
+    assert all(
+        item.proto.help
+        for controls in (
+            test.radio,
+            test.selectbox,
+            test.text_area,
+            test.text_input,
+            test.number_input,
+            test.checkbox,
+            test.multiselect,
+        )
+        for item in controls
+    )
+    assert (
+        next(item for item in test.number_input if item.label == "Largest local groups").value == 1
+    )
     next(
         item for item in test.button if item.label == "Prepare complete group inputs"
     ).click().run()
@@ -266,6 +282,16 @@ def test_integrated_ui_and_current_group_handoff(
     assert not test.exception and test.success
     config = ResearchConfig(workspace=workspace)
     assert run_next_job(config=config)
+    next(item for item in test.button if item.label == "Track this job").click().run()
+    assert test.radio(key="research_section").value == "Jobs"
+    next(item for item in test.button if item.label == "Analyse this family").click().run()
+    assert test.radio(key="research_section").value == "Family analysis"
+    assert test.selectbox(key="analyse_source").value[1] == "family.fasta"
+    test.radio(key="research_section").set_value("Start here").run()
+    next(
+        item for item in test.button if item.label == "Start from OrthoFinder groups (recommended)"
+    ).click().run()
+    assert test.radio(key="research_section").value == "OrthoFinder groups"
     for section in (
         "Discover",
         "Family analysis",
@@ -274,6 +300,7 @@ def test_integrated_ui_and_current_group_handoff(
         "Annotations",
         "Jobs",
         "Setup",
+        "Help & glossary",
     ):
         next(item for item in test.radio if item.label == "Research section").set_value(
             section

@@ -17,3 +17,4 @@ bash -n slurm/orthofinder_results.sbatch
 bash -n slurm/selection_coverage_tree.sbatch
 bash -n slurm/e3_precursor.sbatch
 bash -n slurm/dispersion_benchmark.sbatch
+bash -n scripts/launch_orthofinder_denbi.sh

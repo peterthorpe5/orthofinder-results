@@ -1,5 +1,12 @@
 # Selected DeepClust exports
 
+For your **de.NBI/Sabrina deployment**, DeepClust is already on the server.
+Use the [server launcher and local-retrieval workflow](denbi.md): configure the
+installed index, sequence map and sequences there, and retrieve selected
+clusters with the app's server worker. This exchange guide describes the
+alternative export/import route when transferring selected FASTAs between
+machines; a different database holder is not required for Sabrina.
+
 The official `drostlab/deepclust_dataretrieval` tool extracts clusters efficiently
 from an **already extracted DeepClust database on the extraction machine**. Its
 Git repository contains code. It does not provide a public remote cluster API.

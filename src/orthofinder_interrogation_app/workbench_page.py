@@ -63,9 +63,20 @@ def render_group_inputs(*, config: ResearchConfig, service: OrthoFinderQueryServ
     st.subheader("Start from OrthoFinder groups")
     st.write(
         "Select exact groups or the largest groups at one hierarchy level. The complete "
-        "member list is retained with its run, species and group context. Local size rank "
-        "describes this OrthoFinder selection; E3 candidate scores belong to the E3 app."
+        "member list is retained with its run, species and group context. Start with one "
+        "group, collect its proteins, then compare its sequences or find the corresponding "
+        "global DeepClust families."
     )
+    with st.expander("Aim, steps and outputs", expanded=True):
+        st.markdown(
+            "1. Choose the group authority and species-tree level.\n"
+            "2. Enter exact group IDs or rank local groups by size, then prepare the inputs.\n"
+            "3. Import their local sequences or map their IDs to the server's DeepClust "
+            "database. Track the job and use its next-step button.\n\n"
+            "**Outputs:** complete membership with group/species context, downloadable "
+            "TSV/Excel tables and a queued family import or global mapping. Local size "
+            "ranking describes this OrthoFinder run. It is separate from global cluster size."
+        )
     active = st.session_state.get(ACTIVE_GROUP_STATE, {})
     if not isinstance(active, dict) or active.get("run_id") != service.resource.run_id:
         active = {}
@@ -77,6 +88,7 @@ def render_group_inputs(*, config: ResearchConfig, service: OrthoFinderQueryServ
         "OrthoFinder group authority",
         options=types,
         index=types.index(active["group_type"]) if active.get("group_type") in types else 0,
+        help="HOGs are defined at a species-tree node; flat legacy orthogroups have no node.",
     )
     nodes = list(service.list_hierarchy_nodes(group_type=group_type))
     if not nodes:
@@ -87,6 +99,8 @@ def render_group_inputs(*, config: ResearchConfig, service: OrthoFinderQueryServ
         options=nodes,
         index=nodes.index(active["hierarchy_node"]) if active.get("hierarchy_node") in nodes else 0,
         format_func=lambda value: value or "ROOT (flat orthogroups)",
+        help="Choose the biological ancestor at which the HOG is defined. IDs at different "
+        "levels describe different memberships, even if their text resembles one another.",
     )
     with st.form("orthofinder_research_inputs"):
         exact_text = st.text_area(
@@ -94,13 +108,34 @@ def render_group_inputs(*, config: ResearchConfig, service: OrthoFinderQueryServ
             value=active.get("group_id", "")
             if active.get("group_type") == group_type and active.get("hierarchy_node") == node
             else "",
+            help="Paste IDs from the selected run, authority and hierarchy level. Separate "
+            "with whitespace or commas. Exact IDs override the size-ranking selection.",
         )
-        maximum = st.number_input("Largest local groups", min_value=1, max_value=500, value=200)
+        maximum = st.number_input(
+            "Largest local groups",
+            min_value=1,
+            max_value=500,
+            value=1,
+            help="Number of complete local groups, ordered by membership size. Begin with "
+            "one; increase after reviewing the results. Exact IDs override this ranking "
+            "but must fit within this limit.",
+        )
         species = st.multiselect(
-            "Groups containing species (optional)", options=service.list_species()
+            "Groups containing species (optional)",
+            options=service.list_species(),
+            help="Filter which groups qualify. All members of each qualifying group remain "
+            "in the output, including proteins from other species.",
         )
-        all_species = st.checkbox("Require every selected OrthoFinder species")
-        query = st.text_input("Groups containing protein ID text (optional)")
+        all_species = st.checkbox(
+            "Require every selected OrthoFinder species",
+            help="When selected, each group must contain all chosen species; otherwise "
+            "any chosen species is sufficient. No effect when no species are selected.",
+        )
+        query = st.text_input(
+            "Groups containing protein ID text (optional)",
+            help="Match text in a member ID to find its groups. The output retains their "
+            "complete memberships, rather than just the matching protein.",
+        )
         prepared = st.form_submit_button("Prepare complete group inputs", type="primary")
     signature = (
         str(service.resource.database_path),
@@ -146,7 +181,13 @@ def render_group_inputs(*, config: ResearchConfig, service: OrthoFinderQueryServ
     )
     identifiers = frame["input_id"].drop_duplicates().tolist()
     st.caption(f"{len(identifiers):,} distinct protein IDs; every selected group is complete.")
-    if st.button("Queue selected OrthoFinder proteins for global mapping"):
+    mapping_ready = bool(config.sequence_map and config.index)
+    if st.button(
+        "Queue selected OrthoFinder proteins for global mapping",
+        disabled=not mapping_ready,
+        help="Resolve exact IDs and declared aliases using the server's DeepClust mapping "
+        "and cluster index. This queues a local worker job; it does not download the database.",
+    ):
         queue_action(
             config=config,
             operation="resolve",
@@ -159,7 +200,14 @@ def render_group_inputs(*, config: ResearchConfig, service: OrthoFinderQueryServ
         "Exact global mapping requires the installed DeepClust sequence map and cluster index. "
         "For absent IDs, export these local sequences and use representative homology search."
     )
-    if st.button("Import selected local protein sequences"):
+    if not mapping_ready:
+        st.warning("Global mapping needs sequence_map and index in the research profile.")
+    if st.button(
+        "Import selected local protein sequences",
+        help="Collect the complete selected proteins from embedded sequences or the "
+        "configured sequence Parquet sidecar. Missing or ambiguous sequences stop the "
+        "import. The completed family retains its OrthoFinder context.",
+    ):
         try:
             text = os.environ.get(TERMINAL_MOTIF_ENVIRONMENT_VARIABLE, "").strip()
             fasta = selected_group_fasta(
@@ -176,6 +224,6 @@ def render_group_inputs(*, config: ResearchConfig, service: OrthoFinderQueryServ
                     "source_context": frame.to_dict(orient="records"),
                 },
             )
-            st.info("After the worker finishes, select family.fasta under Family analysis.")
+            st.info("Track this job. When it completes, use Analyse this family to continue.")
         except (ResearchError, OrthoFinderResultsError) as error:
             st.error(str(error))

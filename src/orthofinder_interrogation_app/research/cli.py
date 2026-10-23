@@ -17,6 +17,7 @@ from typing import Sequence
 from .common import ResearchConfig, ResearchError, bounded_number, load_config
 from .deepclust_exchange import centroid_list
 from .jobs import OPERATIONS, cancel_job, get_job, list_jobs, submit_job
+from .profile_copy import copy_profile
 from .runner import run_next_job
 
 
@@ -31,6 +32,12 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("doctor", help="Inspect configured data and optional executables")
     commands.add_parser("jobs", help="List recent queue status as JSON")
+    profile = commands.add_parser(
+        "copy-profile", help="Reuse an existing server profile with an independent job workspace"
+    )
+    profile.add_argument("--source", type=Path, required=True)
+    profile.add_argument("--output", type=Path, required=True)
+    profile.add_argument("--workspace", type=Path, required=True)
     cancel = commands.add_parser("cancel", help="Cancel one queued job")
     cancel.add_argument("--job-id", required=True)
     submit = commands.add_parser("submit", help="Queue work without blocking the web process")
@@ -58,7 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     worker.add_argument(
         "--max-jobs", type=int, default=0, help="Zero keeps polling until interrupted"
     )
-    serve = commands.add_parser("serve", help="Launch the generic UI without E3 resource inputs")
+    serve = commands.add_parser("serve", help="Launch the generic UI without OrthoFinder inputs")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8503)
     return parser
@@ -150,6 +157,9 @@ def main(*, argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     try:
+        if args.command == "copy-profile":
+            print(copy_profile(source=args.source, output=args.output, workspace=args.workspace))
+            return 0
         config = load_config(path=args.config)
         if args.command == "doctor":
             print(json.dumps(installation_status(config=config), indent=2))

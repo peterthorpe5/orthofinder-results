@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
@@ -37,6 +38,7 @@ def test_discovery_ranking_filters_mapping_and_centroid_exports(
     test = AppTest.from_file(
         script_path=Path(ui.__file__).with_name("standalone.py"), default_timeout=20
     ).run()
+    test.radio(key="research_section").set_value("Discover").run()
     next(item for item in test.button if item.label == "Rank global clusters").click().run()
     assert not test.exception and test.dataframe
     assert any("clusters qualify" in item.value for item in test.caption)
@@ -115,7 +117,11 @@ def test_family_controls_and_completed_subcluster_tables(
     )
     run_next_job(config=config, job_id=job)
     profile = tmp_path / "profile.toml"
-    profile.write_text(data=f'workspace="{config.workspace}"\n', encoding="utf-8")
+    profile.write_text(
+        data=f'workspace="{config.workspace}"\nmafft="{sys.executable}"\n'
+        f'fasttree="{sys.executable}"\n',
+        encoding="utf-8",
+    )
     monkeypatch.setenv("ORTHOFINDER_RESEARCH_CONFIG", str(profile))
     test = AppTest.from_file(
         script_path=Path(ui.__file__).with_name("standalone.py"), default_timeout=20
@@ -128,9 +134,9 @@ def test_family_controls_and_completed_subcluster_tables(
     next(item for item in test.radio if item.label == "Family analysis").set_value(
         "Alignment and tree"
     ).run()
-    next(
-        item for item in test.text_input if item.label.startswith("Exact audited subcluster")
-    ).set_value("sub_A")
+    next(item for item in test.selectbox if item.label == "Subcluster to align").set_value(
+        "sub_A"
+    ).run()
     next(item for item in test.text_input if item.label.startswith("Reference/query")).set_value(
         "a"
     )
@@ -140,7 +146,7 @@ def test_family_controls_and_completed_subcluster_tables(
         if item.label.startswith("Use an explicit deterministic sample")
     ).check()
     next(item for item in test.number_input if item.label.startswith("Sample size")).set_value(2)
-    next(item for item in test.button if item.label == "Queue family analysis").click().run()
+    next(item for item in test.button if item.label == "Queue alignment and tree").click().run()
     assert not test.exception and test.success
     pending = next(
         row for row in list_jobs(workspace=config.workspace) if row["operation"] == "align"
@@ -152,5 +158,5 @@ def test_family_controls_and_completed_subcluster_tables(
         "Representative homology search"
     ).run()
     assert not test.exception
-    next(item for item in test.button if item.label == "Queue family analysis").click().run()
+    next(item for item in test.button if item.label == "Queue representative search").click().run()
     assert test.success

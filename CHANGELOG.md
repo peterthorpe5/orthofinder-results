@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.13.0 - 2026-10-22
+
+- Port the supplied E3 v0.20.0 guided workbench: Start here, page aims/steps,
+  field help, downloadable glossary/guide, readable jobs and explicit result
+  handoffs. Adapt the recommended route to complete OrthoFinder HOGs/groups.
+- Begin local group ranking with one group, explain exact-ID/species selection,
+  retain full membership context and disable unconfigured exact global mapping.
+- Add a Mac SSH launcher for de.NBI/Sabrina with separate tmux app/worker,
+  ports, logs/cache paths, validation, status, reconnect and owned app restart.
+- Add copy-profile to share E3's installed DeepClust data/tool settings with a
+  separate OrthoFinder job workspace, without copying database or job files.
+- Add --validate-only for server preflight without binding a port or starting
+  Streamlit, and document server-local retrieval and analysis.
+- Preserve the v0.12.0 engine, viewer assets, reviewed metadata and existing
+  completed resource schema (5); no resource rebuild is required.
+
 ## 0.12.0 - 2026-10-21
 
 - Add a first-class Protein research workbench and direct handoff from existing

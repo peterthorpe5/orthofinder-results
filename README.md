@@ -18,7 +18,16 @@ rebuilding the package.
 This project is independent of, and is not endorsed by, the OrthoFinder
 authors. Cite OrthoFinder itself when using its results.
 
-## Protein research workbench (v0.12.0)
+## Protein research workbench (v0.13.0)
+
+The workbench now opens with **Start here**, page-by-page aims, field help,
+readable job labels and buttons that carry a completed family into its next
+analysis. See the [user guide](docs/workbench_user_guide.md).
+
+For **de.NBI / Sabrina**, use the [Mac launcher and setup guide](docs/denbi.md).
+The app and worker run on the server beside its installed DeepClust database;
+your Mac displays the interface through SSH. E3's working database settings can
+be reused with a separate OrthoFinder queue.
 
 Open **Protein research workbench** in the sidebar, or use **Open this group in
 protein research workbench** from the cluster explorer or a protein search.

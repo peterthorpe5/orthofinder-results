@@ -1,14 +1,20 @@
-# Protein research workbench — OrthoFinder results v0.12.0
+# Protein research workbench — OrthoFinder results v0.13.0
 
 The workbench starts from **your actual OrthoFinder memberships**, selected
 DeepClust exports, or an ordinary protein FASTA. It ports the generic research
 engine from the supplied E3 app v0.19.1 and adds an OrthoFinder-specific input
-adapter. No E3 app installation or E3 resource is needed.
+adapter. Its guided UI incorporates the supplied v0.20.0 usability update. No E3 app installation or E3 resource is needed.
+
+For server-local DeepClust retrieval and analysis on de.NBI/Sabrina, follow
+[the Mac launcher guide](denbi.md). For the guided scientific workflow, read
+[the downloadable user guide](workbench_user_guide.md) or **Help & glossary**
+inside the app. Start with one family before scaling a selection.
 
 ## What appears where
 
 | Research section | Work available |
 | --- | --- |
+| Start here | Recommended starting points, workflow and prerequisites. |
 | OrthoFinder groups | Exact HOGs/orthogroups, largest local groups, species filters, member-ID text filters, complete membership context and sequence transfer. |
 | Discover | Size-ranked global DeepClust catalogue; exact sequence-to-cluster mapping; selected cluster import; exact centroid lists; indexed extraction where the database is installed. |
 | Family analysis | DIAMOND DeepClust with stricter identity/mutual coverage; MAFFT alignment and optional FastTree tree; optional search against global representative sequences. |
@@ -16,6 +22,7 @@ adapter. No E3 app installation or E3 resource is needed.
 | Models | Explicit ESMFold requests, PDB downloads, residue evidence, C-alpha trace, confidence profile and sequence-matched feature overlays. |
 | Annotations | Local InterProScan, local eggNOG-mapper or explicitly enabled remote EMBL-EBI InterProScan; Nightingale positional features where available. |
 | Jobs | Durable status, complete verified artifacts, source records, tool commands, logs and failures. |
+| Help & glossary | Page aims, steps, field explanations, troubleshooting and a downloadable guide. |
 | Setup | Current workspace, tool availability and configured data sources; no database or model downloads. |
 
 All tabular research previews include TSV and formatted Excel controls. Large
